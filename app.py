@@ -6,7 +6,7 @@ import matplotlib.dates as mdates
 from matplotlib.ticker import FuncFormatter
 import io
 
-# --- 1. 定数・設定 ---
+# --- 定数設定 ---
 NAME_MAP = {
     'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 
     'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'
@@ -19,13 +19,21 @@ MON_START = datetime.time(3, 30)
 STD_START = datetime.time(7, 0)
 DATE_COL = 63
 
-# --- 2. 補助関数 ---
+# --- データ処理ロジック ---
 def to_time(val):
     if isinstance(val, datetime.time): return val
     if isinstance(val, (int, float)):
         ts = int(round(val * 86400))
         return datetime.time((ts // 3600) % 24, (ts // 60) % 60, ts % 60)
     return None
+
+@st.cache_data
+def get_available_weeks(df_raw):
+    """ファイル内から月曜日の日付を抽出してリスト化する"""
+    dates = pd.to_datetime(df_raw.iloc[3:, DATE_COL], errors='coerce').dropna()
+    # 月曜日(0)のみを抽出
+    mondays = dates[dates.dt.weekday == 0].dt.date.unique()
+    return sorted(mondays)
 
 def process_tasks(df_raw):
     line_config_dynamic = {}
@@ -83,7 +91,6 @@ def process_tasks(df_raw):
                 tasks.append({'Line': line, 'Product': product, 'Start': s_dt, 'Finish': f_dt, 'Ton': ton, 'is_maint': is_maint})
     return pd.DataFrame(tasks)
 
-# --- 3. プロット関数 ---
 def generate_plot(df_tasks, start_date):
     plot_start = datetime.datetime.combine(start_date, datetime.time(0, 0))
     plot_end = plot_start + datetime.timedelta(days=7)
@@ -93,11 +100,10 @@ def generate_plot(df_tasks, start_date):
 
     fig, ax = plt.subplots(figsize=(56, 28), facecolor='white')
     
-    # Hour Strips
+    # 時刻ストリップの描画
     mid_points = [i + 0.5 for i in range(len(plot_order) - 1)]
-    h_unit = 0.038
     for y_mid in mid_points:
-        ax.axhspan(y_mid - h_unit, y_mid + h_unit, color='#F8F8F8', alpha=0.9, zorder=1.5)
+        ax.axhspan(y_mid - 0.038, y_mid + 0.038, color='#F8F8F8', alpha=0.9, zorder=1.5)
         curr_t = plot_start
         while curr_t < plot_end:
             if curr_t.hour % 3 == 0:
@@ -108,17 +114,19 @@ def generate_plot(df_tasks, start_date):
     for line_key in requested_order:
         line_df = df_tasks[df_tasks['Line'] == line_key].sort_values('Start')
         if line_df.empty: continue
-        # (Merging logic simplified for brevity)
+        
+        # 連続した同じ製品を統合するロジック
         merged_list = []
-        curr = line_df.iloc[0].to_dict()
-        curr['Segments'] = [(curr['Start'], curr['Finish'])]; curr['TotalTon'] = curr['Ton']
-        for idx in range(1, len(line_df)):
-            nxt = line_df.iloc[idx].to_dict()
-            if nxt['Product'] == curr['Product'] and nxt['is_maint'] == curr['is_maint'] and (nxt['Start'] - curr['Finish']) <= datetime.timedelta(hours=4):
-                curr['Finish'] = nxt['Finish']; curr['TotalTon'] += nxt['Ton']; curr['Segments'].append((nxt['Start'], nxt['Finish']))
-            else:
-                merged_list.append(curr); curr = nxt; curr['Segments'] = [(curr['Start'], curr['Finish'])]; curr['TotalTon'] = curr['Ton']
-        merged_list.append(curr)
+        if not line_df.empty:
+            curr = line_df.iloc[0].to_dict()
+            curr['Segments'] = [(curr['Start'], curr['Finish'])]; curr['TotalTon'] = curr['Ton']
+            for idx in range(1, len(line_df)):
+                nxt = line_df.iloc[idx].to_dict()
+                if nxt['Product'] == curr['Product'] and nxt['is_maint'] == curr['is_maint'] and (nxt['Start'] - curr['Finish']) <= datetime.timedelta(hours=4):
+                    curr['Finish'] = nxt['Finish']; curr['TotalTon'] += nxt['Ton']; curr['Segments'].append((nxt['Start'], nxt['Finish']))
+                else:
+                    merged_list.append(curr); curr = nxt; curr['Segments'] = [(curr['Start'], curr['Finish'])]; curr['TotalTon'] = curr['Ton']
+            merged_list.append(curr)
 
         y = line_to_y[NAME_MAP[line_key]]
         for camp in merged_list:
@@ -130,20 +138,24 @@ def generate_plot(df_tasks, start_date):
                     if is_m: ax.hlines(y, s, e, colors=color, linestyles='dotted', linewidth=4, zorder=3)
                     else:
                         ax.hlines(y, s, e, colors=color, linewidth=12, capstyle='butt', zorder=3)
-                        ax.plot([s, s], [y-0.04, y+0.04], [e, e], [y-0.04, y+0.04], color=color, linewidth=3, zorder=4)
+                        ax.plot([s, s], [y-0.04, y+0.04], color=color, linewidth=3, zorder=4)
+                        ax.plot([e, e], [y-0.04, y+0.04], color=color, linewidth=3, zorder=4)
+            
             mid_t = mdates.date2num(max(camp['Start'], plot_start) + (min(camp['Finish'], plot_end) - max(camp['Start'], plot_start))/2)
-            if is_m: ax.text(mid_t, y + 0.12, camp['Product'], ha='center', va='bottom', fontsize=16, color='#444444', fontweight='bold')
+            if is_m:
+                ax.text(mid_t, y + 0.12, camp['Product'], ha='center', va='bottom', fontsize=16, color='#444444', fontweight='bold')
             else:
                 y_off = line_offset_state[NAME_MAP[line_key]]; va = 'bottom' if y_off > 0 else 'top'; line_offset_state[NAME_MAP[line_key]] *= -1
                 ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid_t, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=va, bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=2, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color, connectionstyle='arc3', lw=2), fontsize=18, fontweight='bold')
 
+    # フォーマット設定
     ax.set_xlim(mdates.date2num(plot_start), mdates.date2num(plot_end))
     ax.xaxis.set_major_locator(mdates.DayLocator()); ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%m/%d (%a)'))
     all_3h = [mdates.date2num(plot_start + datetime.timedelta(hours=3*i)) for i in range(57)]
     ax.xaxis.set_minor_locator(plt.FixedLocator(all_3h)); ax.xaxis.set_minor_formatter(FuncFormatter(lambda x, pos: f"{mdates.num2date(x).hour}"))
     ax.set_yticks(range(len(plot_order))); ax.set_yticklabels(plot_order, fontsize=24, fontweight='bold')
     for i in range(8): ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=4)
-    plt.title(f"Production Plan - {start_date}", fontsize=32, pad=60)
+    plt.title(f"Production Plan - Week of {start_date}", fontsize=32, pad=60)
     plt.tight_layout()
     
     img_buf = io.BytesIO()
@@ -151,18 +163,42 @@ def generate_plot(df_tasks, start_date):
     plt.close()
     return img_buf
 
-# --- 4. Streamlit UI ---
-st.set_page_config(layout="wide")
-st.title("Production Plan Visualizer")
+# --- Streamlit UI ---
+st.set_page_config(layout="wide", page_title="Production Planner")
+st.title("🏭 Production Plan Visualizer")
 
 uploaded_file = st.file_uploader("Excelファイルをアップロード (.xlsm)", type=["xlsm"])
-start_date = st.date_input("表示開始日を選択", datetime.date(2026, 6, 1))
 
 if uploaded_file:
-    with st.spinner('データを処理中...'):
-        df_raw = pd.read_excel(uploaded_file, sheet_name='Fill', header=None)
-        df_tasks = process_tasks(df_raw)
-        img_buf = generate_plot(df_tasks, start_date)
+    # データ読み込み（日付検出用）
+    df_raw = pd.read_excel(uploaded_file, sheet_name='Fill', header=None)
+    available_weeks = get_available_weeks(df_raw)
+    
+    if not available_weeks:
+        st.error("ファイル内に有効な月曜日の日付が見つかりませんでした。")
+    else:
+        # UI設定
+        col1, col2 = st.columns([1, 2])
+        with col1:
+            selected_week = st.selectbox("表示したい週の開始日（月曜日）を選択してください", available_weeks)
         
-        st.image(img_buf, use_column_width=True)
-        st.download_button(label="画像をダウンロード", data=img_buf.getvalue(), file_name=f"plan_{start_date}.png", mime="image/png")
+        with col2:
+            st.write(" ") # 余白調整
+            st.write(" ")
+            generate_btn = st.button("🚀 Generate Plan", use_container_width=True)
+
+        if generate_btn:
+            with st.spinner(f'{selected_week}の計画を生成中...'):
+                df_tasks = process_tasks(df_raw)
+                img_buf = generate_plot(df_tasks, selected_week)
+                
+                st.divider()
+                st.image(img_buf, use_column_width=True)
+                
+                # ダウンロードボタン
+                st.download_button(
+                    label="💾 画像として保存",
+                    data=img_buf.getvalue(),
+                    file_name=f"plan_{selected_week}.png",
+                    mime="image/png"
+                )
