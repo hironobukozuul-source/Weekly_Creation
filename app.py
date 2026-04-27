@@ -18,7 +18,6 @@ LINE_START_COLS = {
     'Ref4': 38, 'Ref5': 47, 'Awa': 56
 }
 MON_START = datetime.time(3, 30)
-STD_START = datetime.time(7, 0)
 DATE_COL = 63
 
 # --- データ処理ロジック (Original) ---
@@ -76,7 +75,7 @@ def process_tasks(df_raw):
                 tasks.append({'Line': line, 'Product': product, 'Start': dt_s, 'Finish': dt_f, 'Ton': ton, 'is_maint': is_maint})
     return pd.DataFrame(tasks)
 
-# --- 視覚化ロジック (Original - 変更なし) ---
+# --- 視覚化ロジック (Original) ---
 def generate_plot(df_tasks, start_date):
     plot_start = datetime.datetime.combine(start_date, MON_START)
     plot_end = plot_start + datetime.timedelta(days=7)
@@ -181,6 +180,7 @@ if uploaded_file:
                 ws_vol = wb.active
                 ws_vol.title = "Hourly_Production_Volume"
                 
+                # 議論したロジック: 月曜 00:00 から 168時間
                 start_dt = datetime.datetime.combine(selected_week, datetime.time(0, 0))
                 hour_list = [start_dt + datetime.timedelta(hours=h) for h in range(168)]
                 
@@ -219,10 +219,10 @@ if uploaded_file:
                         for r in range(1, ws_vol.max_row + 1):
                             ws_vol.cell(r, c).border = Border(left=thick_side)
 
-                # --- 修正: Excel貼り付け用に画像を独立したバイナリとして扱う ---
-                excel_img_buf = io.BytesIO(img_buf.getvalue())
+                # --- 修正: ValueError対策でバッファを複製して使用 ---
+                excel_img_data = io.BytesIO(img_buf.getvalue())
                 ws_vis = wb.create_sheet("Visual_Schedule")
-                img = openpyxl.drawing.image.Image(excel_img_buf)
+                img = openpyxl.drawing.image.Image(excel_img_data)
                 ws_vis.add_image(img, 'B2')
                 
                 out_excel = io.BytesIO()
@@ -236,5 +236,5 @@ if uploaded_file:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
-                # Streamlitの画面表示
+                # Streamlitの画面にガントチャートを表示
                 st.image(img_buf)
