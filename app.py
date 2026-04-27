@@ -1,25 +1,23 @@
-import streamlit as st
 import pandas as pd
 import datetime
 import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
-from matplotlib.ticker import FuncFormatter
-import io
+import openpyxl
+from openpyxl.styles import Border, Side, Font, Alignment, PatternFill
 
-# --- 定数設定 ---
-NAME_MAP = {
-    'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 
-    'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'
-}
-LINE_START_COLS = {
-    'Pump': 2, 'Ref1': 11, 'Flexible': 20, 'Ref3': 29, 
-    'Ref4': 38, 'Ref5': 47, 'Awa': 56
-}
-MON_START = datetime.time(3, 30)
-STD_START = datetime.time(7, 0)
-DATE_COL = 63
+# --- 1. 設定とフィルタリング条件 ---
+FILE_PATH = 'Fill_26_06cy_rev01.xlsm'
+OUTPUT_FILE = "Production_Master_Report.xlsx"
+DAY_START_TIME = datetime.time(3, 30)
 
-# --- データ処理ロジック ---
+# メンテナンス除外キーワード
+MAINT_KEYWORDS = [
+    'P/C', 'CLN', 'SETUP', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC',
+    '原価改定', '段取', 'メンテナンス', '点検', '清掃', '切替', '予備',
+    'WAIT', 'SAMPLE', 'サンプル', 'P/C洗浄', '段取り'
+]
+
+# --- 2. データ抽出ロジック ---
 def to_time(val):
     if isinstance(val, datetime.time): return val
     if isinstance(val, (int, float)):
@@ -27,178 +25,128 @@ def to_time(val):
         return datetime.time((ts // 3600) % 24, (ts // 60) % 60, ts % 60)
     return None
 
-@st.cache_data
-def get_available_weeks(df_raw):
-    """ファイル内から月曜日の日付を抽出してリスト化する"""
-    dates = pd.to_datetime(df_raw.iloc[3:, DATE_COL], errors='coerce').dropna()
-    # 月曜日(0)のみを抽出
-    mondays = dates[dates.dt.weekday == 0].dt.date.unique()
-    return sorted(mondays)
+df_raw = pd.read_excel(FILE_PATH, sheet_name='Fill', header=None)
 
-def process_tasks(df_raw):
-    line_config_dynamic = {}
-    for line, start_idx in LINE_START_COLS.items():
-        found_ton_col = None
-        for c in range(start_idx, start_idx + 10):
-            h_vals = [str(df_raw.iloc[r, c]).lower() for r in range(min(3, len(df_raw)))]
-            if any('output' in v for v in h_vals) and any('ton' in v for v in h_vals):
-                found_ton_col = c
-                break
-        if found_ton_col is None: found_ton_col = start_idx + 4
-        line_config_dynamic[line] = {'prod': start_idx, 'start': start_idx + 2, 'finish': start_idx + 3, 'ton': found_ton_col}
+line_start_cols = {
+    'Pump': 2, 'Ref1': 11, 'Flexible': 20, 'Ref3': 29, 
+    'Ref4': 38, 'Ref5': 47, 'Awa': 56
+}
 
-    tasks = []
-    last_dt_per_line = {line: None for line in line_config_dynamic}
-    last_date_per_line = {line: None for line in line_config_dynamic}
+# 各ラインの列構成を特定
+line_config = {}
+for line, start_idx in line_start_cols.items():
+    found_ton_col = None
+    for c in range(start_idx, start_idx + 10):
+        h_vals = [str(df_raw.iloc[r, c]).lower() for r in range(min(3, len(df_raw)))]
+        if any('output' in v for v in h_vals) and any('ton' in v for v in h_vals):
+            found_ton_col = c
+            break
+    line_config[line] = {
+        'prod': start_idx, 
+        'start': start_idx + 2, 
+        'finish': start_idx + 3, 
+        'ton': found_ton_col or (start_idx + 4)
+    }
 
-    for i in range(3, len(df_raw)):
-        date_val = df_raw.iloc[i, DATE_COL]
-        if pd.isna(date_val) or not isinstance(date_val, (datetime.datetime, pd.Timestamp)):
-            continue
-        
-        current_date = date_val.date()
-        shift_start_time = MON_START if current_date.weekday() == 0 else STD_START
-
-        for line, cols in line_config_dynamic.items():
-            product_raw = df_raw.iloc[i, cols['prod']]
-            start_t_raw = df_raw.iloc[i, cols['start']]
-            finish_t_raw = df_raw.iloc[i, cols['finish']]
-            ton_raw = df_raw.iloc[i, cols['ton']]
-            
-            if pd.isna(start_t_raw) or pd.isna(finish_t_raw) or pd.isna(product_raw): continue
-            product = str(product_raw).strip()
-            if product.lower() in ['nan', '連操なし', '']: continue
-            
-            s_time = to_time(start_t_raw)
-            f_time = to_time(finish_t_raw)
-            try: ton = float(ton_raw) if pd.notna(ton_raw) else 0.0
-            except: ton = 0.0
-
-            if s_time and f_time:
-                if last_date_per_line[line] != current_date:
-                    base_dt = datetime.datetime.combine(current_date, shift_start_time)
-                    last_date_per_line[line] = current_date
-                else:
-                    base_dt = last_dt_per_line[line]
-
-                s_dt = datetime.datetime.combine(base_dt.date(), s_time)
-                if s_dt < base_dt: s_dt += datetime.timedelta(days=1)
-                f_dt = datetime.datetime.combine(s_dt.date(), f_time)
-                if f_dt <= s_dt: f_dt += datetime.timedelta(days=1)
-                
-                last_dt_per_line[line] = f_dt
-                is_maint = (ton == 0) or any(x in product for x in ['P/C', 'CLN', 'Setup', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC', '原価改定'])
-                tasks.append({'Line': line, 'Product': product, 'Start': s_dt, 'Finish': f_dt, 'Ton': ton, 'is_maint': is_maint})
-    return pd.DataFrame(tasks)
-
-def generate_plot(df_tasks, start_date):
-    plot_start = datetime.datetime.combine(start_date, datetime.time(0, 0))
-    plot_end = plot_start + datetime.timedelta(days=7)
-    requested_order = ['Pump', 'Ref1', 'Flexible', 'Ref3', 'Ref4', 'Ref5', 'Awa']
-    plot_order = [NAME_MAP[n] for n in requested_order[::-1]]
-    line_to_y = {NAME_MAP[n]: i for i, n in enumerate(requested_order[::-1])}
-
-    fig, ax = plt.subplots(figsize=(56, 28), facecolor='white')
+date_col = 63
+tasks = []
+for i in range(3, len(df_raw)):
+    date_val = df_raw.iloc[i, date_col]
+    if not isinstance(date_val, (datetime.datetime, pd.Timestamp)): continue
     
-    # 時刻ストリップの描画
-    mid_points = [i + 0.5 for i in range(len(plot_order) - 1)]
-    for y_mid in mid_points:
-        ax.axhspan(y_mid - 0.038, y_mid + 0.038, color='#F8F8F8', alpha=0.9, zorder=1.5)
-        curr_t = plot_start
-        while curr_t < plot_end:
-            if curr_t.hour % 3 == 0:
-                ax.text(mdates.date2num(curr_t), y_mid, f"{curr_t.hour}", ha='center', va='center', fontsize=20, color='#666666', fontweight='bold', zorder=2)
-            curr_t += datetime.timedelta(hours=3)
-
-    line_offset_state = {line: 60 for line in plot_order}
-    for line_key in requested_order:
-        line_df = df_tasks[df_tasks['Line'] == line_key].sort_values('Start')
-        if line_df.empty: continue
+    for line, cols in line_config.items():
+        prod_raw = df_raw.iloc[i, cols['prod']]
+        st_raw = df_raw.iloc[i, cols['start']]
+        fn_raw = df_raw.iloc[i, cols['finish']]
+        tn_raw = df_raw.iloc[i, cols['ton']]
         
-        # 連続した同じ製品を統合するロジック
-        merged_list = []
-        if not line_df.empty:
-            curr = line_df.iloc[0].to_dict()
-            curr['Segments'] = [(curr['Start'], curr['Finish'])]; curr['TotalTon'] = curr['Ton']
-            for idx in range(1, len(line_df)):
-                nxt = line_df.iloc[idx].to_dict()
-                if nxt['Product'] == curr['Product'] and nxt['is_maint'] == curr['is_maint'] and (nxt['Start'] - curr['Finish']) <= datetime.timedelta(hours=4):
-                    curr['Finish'] = nxt['Finish']; curr['TotalTon'] += nxt['Ton']; curr['Segments'].append((nxt['Start'], nxt['Finish']))
-                else:
-                    merged_list.append(curr); curr = nxt; curr['Segments'] = [(curr['Start'], curr['Finish'])]; curr['TotalTon'] = curr['Ton']
-            merged_list.append(curr)
-
-        y = line_to_y[NAME_MAP[line_key]]
-        for camp in merged_list:
-            if camp['Finish'] < plot_start or camp['Start'] > plot_end: continue
-            is_m = camp['is_maint']; color = '#1F4E78' if not is_m else '#7F7F7F'
-            for s_dt, f_dt in camp['Segments']:
-                s, e = max(mdates.date2num(s_dt), mdates.date2num(plot_start)), min(mdates.date2num(f_dt), mdates.date2num(plot_end))
-                if e > s:
-                    if is_m: ax.hlines(y, s, e, colors=color, linestyles='dotted', linewidth=4, zorder=3)
-                    else:
-                        ax.hlines(y, s, e, colors=color, linewidth=12, capstyle='butt', zorder=3)
-                        ax.plot([s, s], [y-0.04, y+0.04], color=color, linewidth=3, zorder=4)
-                        ax.plot([e, e], [y-0.04, y+0.04], color=color, linewidth=3, zorder=4)
+        if pd.isna(st_raw) or pd.isna(fn_raw) or pd.isna(prod_raw): continue
+        
+        product = str(prod_raw).strip()
+        if product.lower() in ['nan', '連操なし', '']: continue
+        
+        try: ton = float(tn_raw) if pd.notna(tn_raw) else 0.0
+        except: ton = 0.0
+        
+        s_time, f_time = to_time(st_raw), to_time(fn_raw)
+        if s_time and f_time:
+            dt_s = datetime.datetime.combine(date_val.date(), s_time)
+            dt_f = datetime.datetime.combine(date_val.date(), f_time)
+            if s_time < DAY_START_TIME: dt_s += datetime.timedelta(days=1)
+            if f_time < DAY_START_TIME: dt_f += datetime.timedelta(days=1)
+            if dt_f <= dt_s: dt_f += datetime.timedelta(days=1)
             
-            mid_t = mdates.date2num(max(camp['Start'], plot_start) + (min(camp['Finish'], plot_end) - max(camp['Start'], plot_start))/2)
-            if is_m:
-                ax.text(mid_t, y + 0.12, camp['Product'], ha='center', va='bottom', fontsize=16, color='#444444', fontweight='bold')
-            else:
-                y_off = line_offset_state[NAME_MAP[line_key]]; va = 'bottom' if y_off > 0 else 'top'; line_offset_state[NAME_MAP[line_key]] *= -1
-                ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid_t, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=va, bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=2, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color, connectionstyle='arc3', lw=2), fontsize=18, fontweight='bold')
+            # メンテナンス判定
+            is_maint = (ton <= 0) or any(kw.upper() in product.upper() for kw in MAINT_KEYWORDS)
+            tasks.append({'Line': line, 'Product': product, 'Start': dt_s, 'Finish': dt_f, 'Ton': ton, 'is_maint': is_maint})
 
-    # フォーマット設定
-    ax.set_xlim(mdates.date2num(plot_start), mdates.date2num(plot_end))
-    ax.xaxis.set_major_locator(mdates.DayLocator()); ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%m/%d (%a)'))
-    all_3h = [mdates.date2num(plot_start + datetime.timedelta(hours=3*i)) for i in range(57)]
-    ax.xaxis.set_minor_locator(plt.FixedLocator(all_3h)); ax.xaxis.set_minor_formatter(FuncFormatter(lambda x, pos: f"{mdates.num2date(x).hour}"))
-    ax.set_yticks(range(len(plot_order))); ax.set_yticklabels(plot_order, fontsize=24, fontweight='bold')
-    for i in range(8): ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=4)
-    plt.title(f"Production Plan - Week of {start_date}", fontsize=32, pad=60)
-    plt.tight_layout()
-    
-    img_buf = io.BytesIO()
-    plt.savefig(img_buf, format='png')
-    plt.close()
-    return img_buf
+# --- 3. EXCELシート生成 (Hourly Volume) ---
+wb = openpyxl.Workbook()
+ws_vol = wb.active
+ws_vol.title = "Hourly_Production_Volume"
 
-# --- Streamlit UI ---
-st.set_page_config(layout="wide", page_title="Production Planner")
-st.title("🏭 Production Plan Visualizer")
+# 1週間の時間軸作成
+start_week = datetime.datetime(2026, 6, 1, 0, 0) # 基準日
+hour_list = [start_week + datetime.timedelta(hours=h) for h in range(168)]
 
-uploaded_file = st.file_uploader("Excelファイルをアップロード (.xlsm)", type=["xlsm"])
+# ヘッダー作成
+thick_black = Side(style='thick', color='000000')
+ws_vol.cell(1, 1, "Line").font = Font(bold=True)
+ws_vol.cell(1, 2, "Product").font = Font(bold=True)
 
-if uploaded_file:
-    # データ読み込み（日付検出用）
-    df_raw = pd.read_excel(uploaded_file, sheet_name='Fill', header=None)
-    available_weeks = get_available_weeks(df_raw)
-    
-    if not available_weeks:
-        st.error("ファイル内に有効な月曜日の日付が見つかりませんでした。")
-    else:
-        # UI設定
-        col1, col2 = st.columns([1, 2])
-        with col1:
-            selected_week = st.selectbox("表示したい週の開始日（月曜日）を選択してください", available_weeks)
-        
-        with col2:
-            st.write(" ") # 余白調整
-            st.write(" ")
-            generate_btn = st.button("🚀 Generate Plan", use_container_width=True)
+for i, h_dt in enumerate(hour_list):
+    cell = ws_vol.cell(1, 3 + i, h_dt.strftime('%m/%d %H:00'))
+    cell.font = Font(bold=True)
+    cell.alignment = Alignment(text_rotation=90, horizontal='center')
 
-        if generate_btn:
-            with st.spinner(f'{selected_week}の計画を生成中...'):
-                df_tasks = process_tasks(df_raw)
-                img_buf = generate_plot(df_tasks, selected_week)
-                
-                st.divider()
-                st.image(img_buf, use_column_width=True)
-                
-                # ダウンロードボタン
-                st.download_button(
-                    label="💾 画像として保存",
-                    data=img_buf.getvalue(),
-                    file_name=f"plan_{selected_week}.png",
-                    mime="image/png"
-                )
+# データの書き込み (メンテナンス除外)
+clean_tasks = [t for t in tasks if not t['is_maint']]
+unique_items = sorted(list(set([(t['Line'], t['Product']) for t in clean_tasks])))
+
+for r_idx, (line, product) in enumerate(unique_items):
+    row_num = r_idx + 2
+    ws_vol.cell(row_num, 1, line)
+    ws_vol.cell(row_num, 2, product)
+    for c_idx, h_dt in enumerate(hour_list):
+        h_end = h_dt + datetime.timedelta(hours=1)
+        ton_sum = 0
+        for t in clean_tasks:
+            if t['Line'] == line and t['Product'] == product:
+                overlap = min(t['Finish'], h_end) - max(t['Start'], h_dt)
+                if overlap.total_seconds() > 0:
+                    dur = (t['Finish'] - t['Start']).total_seconds()
+                    ton_sum += t['Ton'] * (overlap.total_seconds() / dur)
+        if ton_sum > 0:
+            cell = ws_vol.cell(row_num, 3 + c_idx, round(ton_sum, 2))
+            cell.fill = PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")
+
+# 0:00に太い黒線を引く (修正済みロジック)
+for col_idx in range(3, ws_vol.max_column + 1):
+    header = str(ws_vol.cell(1, col_idx).value)
+    if header.endswith("00:00") and not (header.endswith("10:00") or header.endswith("20:00")):
+        for r in range(1, ws_vol.max_row + 1):
+            cell = ws_vol.cell(r, col_idx)
+            cell.border = Border(left=thick_black, right=cell.border.right, top=cell.border.top, bottom=cell.border.bottom)
+
+# --- 4. ビジュアル生成と挿入 ---
+name_map = {'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'}
+requested_order = ['Pump', 'Ref1', 'Flexible', 'Ref3', 'Ref4', 'Ref5', 'Awa']
+plot_order_names = [name_map[n] for n in requested_order[::-1]]
+line_to_y = {name_map[n]: i for i, n in enumerate(requested_order[::-1])}
+
+plt.figure(figsize=(24, 12))
+for t in tasks:
+    y = line_to_y[name_map[t['Line']]]
+    s, e = mdates.date2num(t['Start']), mdates.date2num(t['Finish'])
+    color = '#7F7F7F' if t['is_maint'] else '#1F4E78'
+    plt.hlines(y, s, e, colors=color, linewidth=6 if not t['is_maint'] else 2)
+
+plt.gca().xaxis.set_major_formatter(mdates.DateFormatter('%m/%d'))
+plt.yticks(range(len(plot_order_names)), plot_order_names)
+plt.savefig("temp_plan.png", bbox_inches='tight')
+
+ws_vis = wb.create_sheet("Visual_Schedule")
+ws_vis.add_image(openpyxl.drawing.image.Image("temp_plan.png"), 'B2')
+
+wb.save(OUTPUT_FILE)
+print(f"完了: {OUTPUT_FILE}")
