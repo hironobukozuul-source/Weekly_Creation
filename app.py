@@ -181,7 +181,6 @@ if uploaded_file:
                 ws_vol = wb.active
                 ws_vol.title = "Hourly_Production_Volume"
                 
-                # ヘッダー作成 (00:00から168時間)
                 start_dt = datetime.datetime.combine(selected_week, datetime.time(0, 0))
                 hour_list = [start_dt + datetime.timedelta(hours=h) for h in range(168)]
                 
@@ -192,7 +191,6 @@ if uploaded_file:
                     cell.font = Font(bold=True)
                     cell.alignment = Alignment(text_rotation=90, horizontal='center')
 
-                # データ計算 (メンテナンス除外)
                 clean_tasks = df_tasks[~df_tasks['is_maint']]
                 unique_items = sorted(list(set(zip(clean_tasks['Line'], clean_tasks['Product']))))
 
@@ -214,7 +212,6 @@ if uploaded_file:
                             cell = ws_vol.cell(row_num, 3 + c_idx, round(ton_sum, 2))
                             cell.fill = PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")
 
-                # 日付境界線 (0:00)
                 thick_side = Side(style='thick', color='000000')
                 for c in range(3, ws_vol.max_column + 1):
                     header_val = str(ws_vol.cell(1, c).value)
@@ -222,17 +219,15 @@ if uploaded_file:
                         for r in range(1, ws_vol.max_row + 1):
                             ws_vol.cell(r, c).border = Border(left=thick_side)
 
-                # ビジュアルスケジュールシート
+                # --- 修正: Excel貼り付け用に画像を独立したバイナリとして扱う ---
+                excel_img_buf = io.BytesIO(img_buf.getvalue())
                 ws_vis = wb.create_sheet("Visual_Schedule")
-                img_buf.seek(0) # 読み取り位置をリセット
-                img = openpyxl.drawing.image.Image(img_buf)
+                img = openpyxl.drawing.image.Image(excel_img_buf)
                 ws_vis.add_image(img, 'B2')
                 
-                # Excelをメモリに書き出し
                 out_excel = io.BytesIO()
                 wb.save(out_excel)
                 
-                # UI表示
                 st.success("✅ 生成完了")
                 st.download_button(
                     label="📥 Master Report (Excel) をダウンロード",
@@ -241,6 +236,5 @@ if uploaded_file:
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
 
-                # ガントチャートを表示
-                img_buf.seek(0) # Streamlit表示前にもう一度リセット
+                # Streamlitの画面表示
                 st.image(img_buf)
