@@ -13,26 +13,29 @@ from io import BytesIO
 import os
 import requests
 
-# --- フォント設定 ---
+# --- フォント設定 (Streamlit Cloudでの日本語文字化け対策) ---
 def setup_japanese_font():
     font_path = "NotoSansJP-Regular.ttf"
     if not os.path.exists(font_path):
+        # サーバー上にフォントがない場合、GitHubからダウンロード
         url = "https://github.com/googlefonts/noto-cjk/raw/main/Sans/OTF/Japanese/NotoSansCJKjp-Regular.otf"
         r = requests.get(url)
         with open(font_path, 'wb') as f:
             f.write(r.content)
     
     font_prop = font_manager.FontProperties(fname=font_path)
+    # デフォルトのフォントとして登録
     font_manager.fontManager.addfont(font_path)
     plt.rcParams['font.family'] = font_prop.get_name()
     return font_prop
 
+# フォントの初期化
 jp_font = setup_japanese_font()
 
-# --- 定数設定 ---
+# --- 定数設定 (Original app.py) ---
 NAME_MAP = {'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'}
 LINE_START_COLS = {'Pump': 2, 'Ref1': 11, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
-MON_START = datetime.time(3, 30)  # 運用開始時間（Excel集計用）
+MON_START = datetime.time(3, 30)
 DATE_COL = 63
 MAINT_KEYWORDS = ['P/C', 'CLN', 'SETUP', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC', '原価改定', '段取', 'メンテナンス', '点検', '清掃', '切替', '予備', 'WAIT', 'SAMPLE', 'サンプル']
 
@@ -74,21 +77,16 @@ def process_tasks(df_raw):
             s_t, f_t = to_time(st_raw), to_time(fn_raw)
             if s_t and f_t:
                 dt_s, dt_f = datetime.datetime.combine(date_val.date(), s_t), datetime.datetime.combine(date_val.date(), f_t)
-                # 深夜時間帯の補正（3:30より前なら翌日扱い）
                 if s_t < MON_START: dt_s += datetime.timedelta(days=1)
                 if f_t < MON_START: dt_f += datetime.timedelta(days=1)
                 if dt_f <= dt_s: dt_f += datetime.timedelta(days=1)
-                
                 is_m = (ton <= 0) or any(kw.upper() in product.upper() for kw in MAINT_KEYWORDS)
                 tasks.append({'Line': line, 'Product': product, 'Start': dt_s, 'Finish': dt_f, 'Ton': ton, 'is_maint': is_m})
     return pd.DataFrame(tasks)
 
-# --- ガントチャート生成 ---
+# --- ガントチャート生成 (Original Logic) ---
 def generate_plot(df_tasks, start_date):
-    # 【変更点】グラフ表示は 00:00 から
-    plot_start = datetime.datetime.combine(start_date, datetime.time(0, 0))
-    plot_end = plot_start + datetime.timedelta(days=7)
-    
+    plot_start, plot_end = datetime.datetime.combine(start_date, MON_START), datetime.datetime.combine(start_date, MON_START) + datetime.timedelta(days=7)
     requested_order = ['Pump', 'Ref1', 'Flexible', 'Ref3', 'Ref4', 'Ref5', 'Awa']
     plot_order = [NAME_MAP[n] for n in requested_order[::-1]]
     line_to_y = {NAME_MAP[n]: i for i, n in enumerate(requested_order[::-1])}
@@ -168,18 +166,16 @@ if uploaded_file:
                 df_tasks = process_tasks(df_raw)
                 img_buf, fig = generate_plot(df_tasks, selected_week)
                 
-                # --- Excel生成 (Hourly Volume) ---
+                # Excel生成 (Hourly Volume)
                 wb = openpyxl.Workbook(); ws_vol = wb.active; ws_vol.title = "Hourly_Volume"
-                # 【変更点】集計開始時間は運用に合わせた 03:30 から
-                start_dt = datetime.datetime.combine(selected_week, MON_START)
+                start_dt = datetime.datetime.combine(selected_week, datetime.time(0, 0))
                 hour_list = [start_dt + datetime.timedelta(hours=h) for h in range(168)]
                 
                 thick_black = Side(style='thick', color='000000')
                 ws_vol.cell(1, 1, "Line").font = Font(bold=True)
                 ws_vol.cell(1, 2, "Product").font = Font(bold=True)
                 for i, h_dt in enumerate(hour_list):
-                    # ヘッダーに分まで表示 (03:30 等のため)
-                    cell = ws_vol.cell(1, 3 + i, h_dt.strftime('%m/%d %H:%M'))
+                    cell = ws_vol.cell(1, 3 + i, h_dt.strftime('%m/%d %H:00'))
                     cell.font = Font(bold=True); cell.alignment = Alignment(text_rotation=90, horizontal='center')
 
                 clean_tasks = df_tasks[~df_tasks['is_maint']]
@@ -196,17 +192,14 @@ if uploaded_file:
                             cell = ws_vol.cell(row_num, 3 + c_idx, round(ton_sum, 2))
                             cell.fill = PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")
 
-                # 日付の区切り線（運用開始時間に合わせて太線を描画）
                 for col_idx in range(3, ws_vol.max_column + 1):
                     header = str(ws_vol.cell(1, col_idx).value)
-                    if "03:30" in header:
+                    if header.endswith("00:00") and not (header.endswith("10:00") or header.endswith("20:00")):
                         for r in range(1, ws_vol.max_row + 1):
                             ws_vol.cell(r, col_idx).border = Border(left=thick_black)
 
                 ws_vis = wb.create_sheet("Visual_Schedule")
-                # バッファをコピーして使用（openpyxlが閉じてしまうのを防ぐため）
-                img_copy = BytesIO(img_buf.getvalue())
-                ws_vis.add_image(openpyxl.drawing.image.Image(img_copy), 'B2')
+                ws_vis.add_image(openpyxl.drawing.image.Image(img_buf), 'B2')
                 out_excel = BytesIO(); wb.save(out_excel)
                 
                 st.success("✅ 生成完了")
