@@ -76,7 +76,7 @@ def process_tasks(df_raw):
                 tasks.append({'Line': line, 'Product': product, 'Start': dt_s, 'Finish': dt_f, 'Ton': ton, 'is_maint': is_maint})
     return pd.DataFrame(tasks)
 
-# --- 視覚化ロジック (Original) ---
+# --- 視覚化ロジック (Original - 変更なし) ---
 def generate_plot(df_tasks, start_date):
     plot_start = datetime.datetime.combine(start_date, MON_START)
     plot_end = plot_start + datetime.timedelta(days=7)
@@ -176,12 +176,12 @@ if uploaded_file:
                 df_tasks = process_tasks(df_raw)
                 img_buf = generate_plot(df_tasks, selected_week)
                 
-                # --- Excel生成ロジックの追加 ---
+                # --- Excel生成ロジック ---
                 wb = openpyxl.Workbook()
                 ws_vol = wb.active
                 ws_vol.title = "Hourly_Production_Volume"
                 
-                # ヘッダー作成 (選択された週の00:00から168時間)
+                # ヘッダー作成 (00:00から168時間)
                 start_dt = datetime.datetime.combine(selected_week, datetime.time(0, 0))
                 hour_list = [start_dt + datetime.timedelta(hours=h) for h in range(168)]
                 
@@ -214,27 +214,33 @@ if uploaded_file:
                             cell = ws_vol.cell(row_num, 3 + c_idx, round(ton_sum, 2))
                             cell.fill = PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")
 
-                # 境界線 (0:00)
+                # 日付境界線 (0:00)
                 thick_side = Side(style='thick', color='000000')
                 for c in range(3, ws_vol.max_column + 1):
-                    if "00:00" in str(ws_vol.cell(1, c).value) and not any(x in str(ws_vol.cell(1, c).value) for x in ["10:00", "20:00"]):
+                    header_val = str(ws_vol.cell(1, c).value)
+                    if "00:00" in header_val and not any(x in header_val for x in ["10:00", "20:00"]):
                         for r in range(1, ws_vol.max_row + 1):
                             ws_vol.cell(r, c).border = Border(left=thick_side)
 
-                # ビジュアルシート
+                # ビジュアルスケジュールシート
                 ws_vis = wb.create_sheet("Visual_Schedule")
+                img_buf.seek(0) # 読み取り位置をリセット
                 img = openpyxl.drawing.image.Image(img_buf)
                 ws_vis.add_image(img, 'B2')
                 
-                # メモリに保存してダウンロード
+                # Excelをメモリに書き出し
                 out_excel = io.BytesIO()
                 wb.save(out_excel)
                 
-                st.success("✅ 全データの処理が完了しました。")
+                # UI表示
+                st.success("✅ 生成完了")
                 st.download_button(
                     label="📥 Master Report (Excel) をダウンロード",
                     data=out_excel.getvalue(),
                     file_name=f"Production_Master_{selected_week}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
                 )
+
+                # ガントチャートを表示
+                img_buf.seek(0) # Streamlit表示前にもう一度リセット
                 st.image(img_buf)
