@@ -122,23 +122,25 @@ def generate_plot(df_tasks, start_date):
                 merged.append(curr); curr = nxt; curr['Segments'], curr['TotalTon'] = [(curr['Start'], curr['Finish'])], curr['Ton']
         merged.append(curr)
 
+    # Tickの高さ設定: トータル0.1 (y ± 0.05)
+    tick_half_h = 0.05 
+
     for camp in merged:
         if camp['Finish'] < plot_start or camp['Start'] > plot_end: continue
         line_name = NAME_MAP[camp['Line']]
         y, is_m, color = line_to_y[line_name], camp['is_maint'], ('#7F7F7F' if camp['is_maint'] else '#1F4E78')
         
-        # 描画ループ
         for s_dt, f_dt in camp['Segments']:
             s, e = max(mdates.date2num(s_dt), mdates.date2num(plot_start)), min(mdates.date2num(f_dt), mdates.date2num(plot_end))
             if e > s:
                 if is_m: 
                     ax.hlines(y, s, e, colors=color, linestyles='dotted', linewidth=2.5, zorder=3)
-                    # メンテナンス用のTick（短い縦線）
-                    ax.vlines(e, y - 0.1, y + 0.1, colors=color, linewidth=1.5, zorder=4)
+                    # メンテナンス用Tick
+                    ax.vlines(e, y - tick_half_h, y + tick_half_h, colors=color, linewidth=1.2, zorder=4)
                 else: 
                     ax.hlines(y, s, e, colors=color, linewidth=5, capstyle='butt', zorder=3)
-                    # 生産用のTick（少し太めの短い縦線）
-                    ax.vlines(e, y - 0.15, y + 0.15, colors=color, linewidth=2, zorder=4)
+                    # 生産用Tick
+                    ax.vlines(e, y - tick_half_h, y + tick_half_h, colors=color, linewidth=1.8, zorder=4)
         
         mid = mdates.date2num(max(camp['Start'], plot_start) + (min(camp['Finish'], plot_end) - max(camp['Start'], plot_start))/2)
         if is_m:
@@ -199,11 +201,9 @@ if uploaded_file:
                 df_tasks = process_tasks(df_raw)
                 img_buf, fig = generate_plot(df_tasks, selected_week)
                 
-                # --- Excel生成 ---
                 wb = openpyxl.Workbook(); ws_vol = wb.active; ws_vol.title = "Hourly_Volume"
                 start_dt_excel = datetime.datetime.combine(selected_week, datetime.time(0, 0))
                 hour_list = [start_dt_excel + datetime.timedelta(hours=h) for h in range(TOTAL_HOURS)]
-                
                 thick_black = Side(style='thick', color='000000')
                 ws_vol.cell(1, 1, "Line").font = Font(bold=True)
                 ws_vol.cell(1, 2, "Product").font = Font(bold=True)
@@ -237,9 +237,8 @@ if uploaded_file:
                 ws_vis = wb.create_sheet("Visual_Schedule")
                 img_copy = BytesIO(img_buf.getvalue())
                 ws_vis.add_image(openpyxl.drawing.image.Image(img_copy), 'B2')
-                
                 out_excel = BytesIO(); wb.save(out_excel)
                 
-                st.success("✅ 生成完了 (174時間 / 終点Ticks追加)")
+                st.success("✅ 生成完了 (Ticks高さ0.1調整済)")
                 st.download_button("📥 ダウンロード (Excel)", out_excel.getvalue(), f"Production_Report_{selected_week}.xlsx")
                 st.pyplot(fig)
