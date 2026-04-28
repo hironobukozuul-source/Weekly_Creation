@@ -33,7 +33,7 @@ NAME_MAP = {'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 'Ref3': 'Re
 LINE_START_COLS = {'Pump': 2, 'Ref1': 11, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
 DATE_COL = 63
 MAINT_KEYWORDS = ['P/C', 'CLN', 'SETUP', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC', '原価改定', '段取', 'メンテナンス', '点検', '清掃', '切替', '予備', 'WAIT', 'SAMPLE']
-TOTAL_HOURS = 174 
+TOTAL_HOURS = 174 # 174時間を維持
 
 def to_time(val):
     if isinstance(val, datetime.time): return val
@@ -61,12 +61,10 @@ def process_tasks(df_raw):
         line_config[line] = {'prod': start_idx, 'start': start_idx+2, 'finish': start_idx+3, 'ton': found_ton_col or (start_idx+4)}
 
     line_states = {}
-
     for i in range(3, len(df_raw)):
         date_val = df_raw.iloc[i, DATE_COL]
         if not isinstance(date_val, (datetime.datetime, pd.Timestamp)): continue
         base_date = date_val.date()
-
         for line, cols in line_config.items():
             prod_raw, st_raw, fn_raw, tn_raw = df_raw.iloc[i, cols['prod']], df_raw.iloc[i, cols['start']], df_raw.iloc[i, cols['finish']], df_raw.iloc[i, cols['ton']]
             if pd.isna(st_raw) or pd.isna(fn_raw) or pd.isna(prod_raw): continue
@@ -80,18 +78,14 @@ def process_tasks(df_raw):
                     line_states[line]['current_date'] += datetime.timedelta(days=1)
                 if base_date > line_states[line]['current_date']:
                     line_states[line]['current_date'] = base_date
-
                 dt_s = datetime.datetime.combine(line_states[line]['current_date'], s_t)
                 dt_f = datetime.datetime.combine(line_states[line]['current_date'], f_t)
                 if f_t < s_t: dt_f += datetime.timedelta(days=1)
-                
                 try: ton = float(tn_raw) if pd.notna(tn_raw) else 0.0
                 except: ton = 0.0
-                
                 is_m = (ton <= 0) or any(kw.upper() in product.upper() for kw in MAINT_KEYWORDS)
                 tasks.append({'Line': line, 'Product': product, 'Start': dt_s, 'Finish': dt_f, 'Ton': ton, 'is_maint': is_m})
                 line_states[line]['last_start_time'] = s_t
-
     return pd.DataFrame(tasks)
 
 def generate_plot(df_tasks, start_date):
@@ -105,14 +99,10 @@ def generate_plot(df_tasks, start_date):
     fig, ax = plt.subplots(figsize=(30, 14), facecolor='white')
     line_offset_state = {line: 30 for line in plot_order}
 
-    # 各ラインごとにタスクを整理
     merged = []
     for line_key in requested_order:
         line_df = df_tasks[df_tasks['Line'] == line_key].sort_values('Start')
         if line_df.empty: continue
-        
-        # キャンペーン連結ロジック (4時間以内の同じ品目は連結)
-        line_campaigns = []
         curr = line_df.iloc[0].to_dict()
         curr['Segments'], curr['TotalTon'] = [(curr['Start'], curr['Finish'])], curr['Ton']
         for idx in range(1, len(line_df)):
@@ -121,18 +111,8 @@ def generate_plot(df_tasks, start_date):
                 curr['Finish'], curr['TotalTon'] = nxt['Finish'], curr['TotalTon'] + nxt['Ton']
                 curr['Segments'].append((nxt['Start'], nxt['Finish']))
             else:
-                line_campaigns.append(curr); curr = nxt; curr['Segments'], curr['TotalTon'] = [(curr['Start'], curr['Finish'])], curr['Ton']
-        line_campaigns.append(curr)
-        
-        # アイドル時間のラベル表示 (水平方向の"Hours in between")
-        for i in range(len(line_campaigns) - 1):
-            gap = line_campaigns[i+1]['Start'] - line_campaigns[i]['Finish']
-            if gap >= datetime.timedelta(minutes=30):
-                mid_gap = mdates.date2num(line_campaigns[i]['Finish'] + gap/2)
-                y_val = line_to_y[NAME_MAP[line_key]]
-                ax.text(mid_gap, y_val, f"{gap.total_seconds()/3600:.1f}h", color='#CC0000', fontsize=8, ha='center', va='center', fontweight='bold', style='italic', bbox=dict(facecolor='white', alpha=0.6, edgecolor='none', pad=1))
-
-        merged.extend(line_campaigns)
+                merged.append(curr); curr = nxt; curr['Segments'], curr['TotalTon'] = [(curr['Start'], curr['Finish'])], curr['Ton']
+        merged.append(curr)
 
     # 描画
     for camp in merged:
@@ -153,15 +133,15 @@ def generate_plot(df_tasks, start_date):
         else:
             ax.text(mid, y + 0.1, camp['Product'], ha='center', va='bottom', fontsize=9, color='#555555', fontproperties=jp_font)
 
-    # ライン間の時刻ガイド (垂直方向の読みやすさ向上)
+    # --- ライン間の時刻表示ストリップ ---
     for y_idx in range(len(plot_order)):
-        if y_idx > 0:
-            # ラインの間に薄く時刻を散布
+        if y_idx < len(plot_order) - 1:
+            strip_y = y_idx + 0.5
+            ax.axhline(strip_y, color='#F8F8F8', linewidth=10, zorder=0)
             for h_offset in range(0, TOTAL_HOURS, 6):
                 t_mark = plot_start + datetime.timedelta(hours=h_offset)
-                ax.text(mdates.date2num(t_mark), y_idx - 0.5, f"{t_mark.hour}h", color='#BBBBBB', fontsize=7, ha='center', va='center')
+                ax.text(mdates.date2num(t_mark), strip_y, f"{t_mark.hour}h", color='#999999', fontsize=7, ha='center', va='center', zorder=2)
 
-    # 軸・グリッド設定
     ax.set_xlim(mdates.date2num(plot_start), mdates.date2num(plot_end))
     for i in range(9): ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=2, zorder=5)
     
@@ -192,17 +172,17 @@ if uploaded_file:
     
     if available_weeks:
         col1, col2 = st.columns([1, 2])
-        with col1: selected_week = st.selectbox("開始日（月曜日）を選択", available_weeks)
+        with col1: selected_week = st.selectbox("開始日を選択", available_weeks)
         with col2:
             st.write(" ")
-            generate_btn = st.button("🚀 Generate Plan & Excel", use_container_width=True)
+            generate_btn = st.button("🚀 Generate Plan", use_container_width=True)
 
         if generate_btn:
             with st.spinner('処理中...'):
                 df_tasks = process_tasks(df_raw)
                 img_buf, fig = generate_plot(df_tasks, selected_week)
                 
-                # Excel生成
+                # Excel生成 (174h & レンジ形式ヘッダー)
                 wb = openpyxl.Workbook(); ws_vol = wb.active; ws_vol.title = "Hourly_Volume"
                 start_dt_excel = datetime.datetime.combine(selected_week, datetime.time(0, 0))
                 hour_list = [start_dt_excel + datetime.timedelta(hours=h) for h in range(TOTAL_HOURS)]
@@ -236,11 +216,7 @@ if uploaded_file:
                         for r in range(1, ws_vol.max_row + 1):
                             ws_vol.cell(r, col_idx).border = Border(left=thick_black)
 
-                ws_vis = wb.create_sheet("Visual_Schedule")
-                img_copy = BytesIO(img_buf.getvalue())
-                ws_vis.add_image(openpyxl.drawing.image.Image(img_copy), 'B2')
                 out_excel = BytesIO(); wb.save(out_excel)
-                
-                st.success("✅ 生成完了 (アイドル時間表示・174h)")
-                st.download_button("📥 ダウンロード (Excel)", out_excel.getvalue(), f"Report_{selected_week}_Full.xlsx")
+                st.success("✅ 生成完了 (174h + Time Strips + Range Header)")
+                st.download_button("📥 Excelダウンロード", out_excel.getvalue(), f"Report_{selected_week}_Full.xlsx")
                 st.pyplot(fig)
