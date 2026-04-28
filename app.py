@@ -140,22 +140,23 @@ def generate_plot(df_tasks, start_date):
             line_offset_state[line_name] = -30 if y_off > 0 else 30
             ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=('bottom' if y_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color), fontsize=10, fontweight='bold', fontproperties=jp_font)
 
-    # --- ライン間の時刻ストリップ（3時間おき・数字のみ） ---
-    for y_idx in range(len(plot_order)):
-        if y_idx < len(plot_order) - 1:
-            strip_y = y_idx + 0.5
-            ax.axhline(strip_y, color='#F8F8F8', linewidth=10, zorder=0)
-            for h_offset in range(0, TOTAL_HOURS, 3):
-                t_mark = plot_start + datetime.timedelta(hours=h_offset)
-                ax.text(mdates.date2num(t_mark), strip_y, f"{t_mark.hour}", color='#AAAAAA', fontsize=7, ha='center', va='center', zorder=2)
+    # --- 各ラインの間に3時間ガイドを追加 ---
+    for y_idx in range(len(plot_order) - 1):
+        strip_y = y_idx + 0.5
+        ax.axhline(strip_y, color='#F0F0F0', linewidth=12, zorder=1) # 少し太めのガイドライン
+        for h_offset in range(0, TOTAL_HOURS, 3):
+            t_mark = plot_start + datetime.timedelta(hours=h_offset)
+            ax.text(mdates.date2num(t_mark), strip_y, f"{t_mark.hour}", color='#999999', fontsize=8, ha='center', va='center', zorder=2, fontweight='bold')
 
     ax.set_xlim(mdates.date2num(plot_start), mdates.date2num(plot_end))
+    # 日付区切り（赤線）
     for i in range(9): 
         ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=2, zorder=5)
     
+    # 1時間ごとの背景グリッド
     curr_h = plot_start
     while curr_h <= plot_end:
-        ax.axvline(mdates.date2num(curr_h), color='#EEEEEE', linewidth=0.7, zorder=1)
+        ax.axvline(mdates.date2num(curr_h), color='#EEEEEE', linewidth=0.7, zorder=0)
         curr_h += datetime.timedelta(hours=1)
 
     ax.xaxis.set_major_locator(mdates.DayLocator()); ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%m/%d (%a)'))
@@ -199,7 +200,6 @@ if uploaded_file:
                 ws_vol.cell(1, 1, "Line").font = Font(bold=True)
                 ws_vol.cell(1, 2, "Product").font = Font(bold=True)
                 
-                # ヘッダー（レンジ形式）作成
                 for i, h_dt in enumerate(hour_list):
                     next_h = h_dt + datetime.timedelta(hours=1)
                     header_str = f"{h_dt.strftime('%m/%d %H:%M')}~{next_h.strftime('%H:%M')}"
@@ -209,7 +209,6 @@ if uploaded_file:
                 clean_tasks = df_tasks[~df_tasks['is_maint']]
                 unique_items = sorted(list(set(zip(clean_tasks['Line'], clean_tasks['Product']))))
 
-                # データ行の書き込み
                 for r_idx, (line, product) in enumerate(unique_items):
                     row_num = r_idx + 2
                     ws_vol.cell(row_num, 1, line); ws_vol.cell(row_num, 2, product)
@@ -221,20 +220,16 @@ if uploaded_file:
                             cell = ws_vol.cell(row_num, 3 + c_idx, round(ton_sum, 2))
                             cell.fill = PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")
 
-                # 日付区切り線の適用
                 for col_idx in range(3, ws_vol.max_column + 1):
                     header = str(ws_vol.cell(1, col_idx).value)
                     if "00:00" in header:
                         for r in range(1, ws_vol.max_row + 1):
                             ws_vol.cell(r, col_idx).border = Border(left=thick_black)
 
-                # ビジュアルスケジュールシート作成
                 ws_vis = wb.create_sheet("Visual_Schedule")
                 img_copy = BytesIO(img_buf.getvalue())
                 ws_vis.add_image(openpyxl.drawing.image.Image(img_copy), 'B2')
                 
                 out_excel = BytesIO(); wb.save(out_excel)
                 
-                st.success(f"✅ 生成完了 (174時間 / 3時間間隔ガイド)")
-                st.download_button("📥 ダウンロード (Excel)", out_excel.getvalue(), f"Production_Report_{selected_week}.xlsx")
-                st.pyplot(fig)
+                st.success(f"✅ 生成完了 (174時間 /
