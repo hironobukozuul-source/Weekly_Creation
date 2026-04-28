@@ -33,7 +33,6 @@ NAME_MAP = {'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 'Ref3': 'Re
 LINE_START_COLS = {'Pump': 2, 'Ref1': 11, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
 DATE_COL = 63
 MAINT_KEYWORDS = ['P/C', 'CLN', 'SETUP', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC', '原価改定', '段取', 'メンテナンス', '点検', '清掃', '切替', '予備', 'WAIT', 'SAMPLE']
-# 集計時間を168 + 6 = 174時間に設定
 TOTAL_HOURS = 174 
 
 def to_time(val):
@@ -62,7 +61,6 @@ def process_tasks(df_raw):
         line_config[line] = {'prod': start_idx, 'start': start_idx+2, 'finish': start_idx+3, 'ton': found_ton_col or (start_idx+4)}
 
     line_states = {}
-
     for i in range(3, len(df_raw)):
         date_val = df_raw.iloc[i, DATE_COL]
         if not isinstance(date_val, (datetime.datetime, pd.Timestamp)): continue
@@ -78,7 +76,7 @@ def process_tasks(df_raw):
             s_t, f_t = to_time(st_raw), to_time(fn_raw)
             if s_t and f_t:
                 if line not in line_states:
-                    line_states[line] = {'current_date': base_date, 'last_start_time': s_t, 'initialized': True}
+                    line_states[line] = {'current_date': base_date, 'last_start_time': s_t}
 
                 if s_t < line_states[line]['last_start_time']:
                     line_states[line]['current_date'] += datetime.timedelta(days=1)
@@ -96,7 +94,6 @@ def process_tasks(df_raw):
                 is_m = (ton <= 0) or any(kw.upper() in product.upper() for kw in MAINT_KEYWORDS)
                 tasks.append({'Line': line, 'Product': product, 'Start': dt_s, 'Finish': dt_f, 'Ton': ton, 'is_maint': is_m})
                 line_states[line]['last_start_time'] = s_t
-
     return pd.DataFrame(tasks)
 
 def generate_plot(df_tasks, start_date):
@@ -141,10 +138,19 @@ def generate_plot(df_tasks, start_date):
         else:
             y_off = line_offset_state[line_name]
             line_offset_state[line_name] = -30 if y_off > 0 else 30
-            ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=('bottom' if y_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color, connectionstyle='arc3'), fontsize=10, fontweight='bold', fontproperties=jp_font)
+            ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=('bottom' if y_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color), fontsize=10, fontweight='bold', fontproperties=jp_font)
+
+    # --- ライン間の時刻ストリップ（3時間おき・数字のみ） ---
+    for y_idx in range(len(plot_order)):
+        if y_idx < len(plot_order) - 1:
+            strip_y = y_idx + 0.5
+            ax.axhline(strip_y, color='#F8F8F8', linewidth=10, zorder=0)
+            for h_offset in range(0, TOTAL_HOURS, 3):
+                t_mark = plot_start + datetime.timedelta(hours=h_offset)
+                ax.text(mdates.date2num(t_mark), strip_y, f"{t_mark.hour}", color='#AAAAAA', fontsize=7, ha='center', va='center', zorder=2)
 
     ax.set_xlim(mdates.date2num(plot_start), mdates.date2num(plot_end))
-    for i in range(9): # 174時間なので8日目まで線を引く
+    for i in range(9): 
         ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=2, zorder=5)
     
     curr_h = plot_start
@@ -184,15 +190,16 @@ if uploaded_file:
                 df_tasks = process_tasks(df_raw)
                 img_buf, fig = generate_plot(df_tasks, selected_week)
                 
-                # Excel生成
+                # --- Excel生成セクション ---
                 wb = openpyxl.Workbook(); ws_vol = wb.active; ws_vol.title = "Hourly_Volume"
                 start_dt_excel = datetime.datetime.combine(selected_week, datetime.time(0, 0))
-                # リストを174時間に拡張
                 hour_list = [start_dt_excel + datetime.timedelta(hours=h) for h in range(TOTAL_HOURS)]
                 
                 thick_black = Side(style='thick', color='000000')
                 ws_vol.cell(1, 1, "Line").font = Font(bold=True)
                 ws_vol.cell(1, 2, "Product").font = Font(bold=True)
+                
+                # ヘッダー（レンジ形式）作成
                 for i, h_dt in enumerate(hour_list):
                     next_h = h_dt + datetime.timedelta(hours=1)
                     header_str = f"{h_dt.strftime('%m/%d %H:%M')}~{next_h.strftime('%H:%M')}"
@@ -202,6 +209,7 @@ if uploaded_file:
                 clean_tasks = df_tasks[~df_tasks['is_maint']]
                 unique_items = sorted(list(set(zip(clean_tasks['Line'], clean_tasks['Product']))))
 
+                # データ行の書き込み
                 for r_idx, (line, product) in enumerate(unique_items):
                     row_num = r_idx + 2
                     ws_vol.cell(row_num, 1, line); ws_vol.cell(row_num, 2, product)
@@ -213,17 +221,20 @@ if uploaded_file:
                             cell = ws_vol.cell(row_num, 3 + c_idx, round(ton_sum, 2))
                             cell.fill = PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")
 
+                # 日付区切り線の適用
                 for col_idx in range(3, ws_vol.max_column + 1):
                     header = str(ws_vol.cell(1, col_idx).value)
                     if "00:00" in header:
                         for r in range(1, ws_vol.max_row + 1):
                             ws_vol.cell(r, col_idx).border = Border(left=thick_black)
 
+                # ビジュアルスケジュールシート作成
                 ws_vis = wb.create_sheet("Visual_Schedule")
                 img_copy = BytesIO(img_buf.getvalue())
                 ws_vis.add_image(openpyxl.drawing.image.Image(img_copy), 'B2')
+                
                 out_excel = BytesIO(); wb.save(out_excel)
                 
-                st.success("✅ 生成完了 (174時間)")
-                st.download_button("📥 ダウンロード (Excel)", out_excel.getvalue(), f"Report_{selected_week}_174h.xlsx")
+                st.success(f"✅ 生成完了 (174時間 / 3時間間隔ガイド)")
+                st.download_button("📥 ダウンロード (Excel)", out_excel.getvalue(), f"Production_Report_{selected_week}.xlsx")
                 st.pyplot(fig)
