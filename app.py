@@ -31,7 +31,7 @@ jp_font = setup_japanese_font()
 # --- 定数設定 ---
 NAME_MAP = {'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'}
 LINE_START_COLS = {'Pump': 2, 'Ref1': 11, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
-DAY_CUTOFF = datetime.time(3, 30) # 一日の切り替わり（始業時刻）
+DAY_CUTOFF = datetime.time(3, 30) # 月曜日の集計開始時刻
 DATE_COL = 63
 MAINT_KEYWORDS = ['P/C', 'CLN', 'SETUP', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC', '原価改定', '段取', 'メンテナンス', '点検', '清掃', '切替', '予備', 'WAIT', 'SAMPLE']
 
@@ -41,14 +41,6 @@ def to_time(val):
         ts = int(round(val * 86400))
         return datetime.time((ts // 3600) % 24, (ts // 60) % 60, ts % 60)
     return None
-
-def is_crossing_cutoff(last_t, next_t):
-    """直前の終了時刻と次の開始時刻の間に03:30(DAY_CUTOFF)があるか判定"""
-    if last_t == next_t: return False
-    # 例: last=02:45, next=03:30 -> True (03:30を跨いだ)
-    if last_t < DAY_CUTOFF <= next_t: return True
-    # 例: last=23:00, next=02:45 -> False (03:30に達していない)
-    return False
 
 @st.cache_data
 def get_available_weeks(df_raw):
@@ -95,20 +87,20 @@ def process_tasks(df_raw):
                     else:
                         continue
 
-                # --- 修正された日付進行ロジック ---
-                # 1. 時刻の逆転 (例: 23:00 -> 01:00) 
-                # 2. または 03:30 境界を跨いだ (例: 02:45 -> 03:30)
+                # --- 修正された日付進行ロジック (0:00境界) ---
                 if line_states[line]['initialized']:
-                    if (s_t < line_states[line]['last_finish_time']) or is_crossing_cutoff(line_states[line]['last_finish_time'], s_t):
+                    # 時刻の逆転 (例: 23:00 -> 01:00) が起きたら日付を1日進める
+                    if s_t < line_states[line]['last_finish_time']:
                         line_states[line]['current_date'] += datetime.timedelta(days=1)
                 
-                # 日付列との整合性（BK列が明示的に進んでいる場合）
+                # 日付列（BK列）との整合性チェック
                 if base_date > line_states[line]['current_date']:
                     line_states[line]['current_date'] = base_date
 
                 dt_s = datetime.datetime.combine(line_states[line]['current_date'], s_t)
                 dt_f = datetime.datetime.combine(line_states[line]['current_date'], f_t)
                 
+                # 作業単体での日付跨ぎ（例：23:00開始、02:00終了）
                 if f_t <= s_t:
                     dt_f += datetime.timedelta(days=1)
                 
@@ -118,6 +110,7 @@ def process_tasks(df_raw):
                 is_m = (ton <= 0) or any(kw.upper() in product.upper() for kw in MAINT_KEYWORDS)
                 tasks.append({'Line': line, 'Product': product, 'Start': dt_s, 'Finish': dt_f, 'Ton': ton, 'is_maint': is_m})
                 
+                # 次の判定のために終了時刻を保存
                 line_states[line]['last_finish_time'] = f_t
 
     return pd.DataFrame(tasks)
