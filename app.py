@@ -126,11 +126,19 @@ def generate_plot(df_tasks, start_date):
         if camp['Finish'] < plot_start or camp['Start'] > plot_end: continue
         line_name = NAME_MAP[camp['Line']]
         y, is_m, color = line_to_y[line_name], camp['is_maint'], ('#7F7F7F' if camp['is_maint'] else '#1F4E78')
+        
+        # 描画ループ
         for s_dt, f_dt in camp['Segments']:
             s, e = max(mdates.date2num(s_dt), mdates.date2num(plot_start)), min(mdates.date2num(f_dt), mdates.date2num(plot_end))
             if e > s:
-                if is_m: ax.hlines(y, s, e, colors=color, linestyles='dotted', linewidth=2.5, zorder=3)
-                else: ax.hlines(y, s, e, colors=color, linewidth=5, capstyle='butt', zorder=3)
+                if is_m: 
+                    ax.hlines(y, s, e, colors=color, linestyles='dotted', linewidth=2.5, zorder=3)
+                    # メンテナンス用のTick（短い縦線）
+                    ax.vlines(e, y - 0.1, y + 0.1, colors=color, linewidth=1.5, zorder=4)
+                else: 
+                    ax.hlines(y, s, e, colors=color, linewidth=5, capstyle='butt', zorder=3)
+                    # 生産用のTick（少し太めの短い縦線）
+                    ax.vlines(e, y - 0.15, y + 0.15, colors=color, linewidth=2, zorder=4)
         
         mid = mdates.date2num(max(camp['Start'], plot_start) + (min(camp['Finish'], plot_end) - max(camp['Start'], plot_start))/2)
         if is_m:
@@ -140,7 +148,7 @@ def generate_plot(df_tasks, start_date):
             line_offset_state[line_name] = -30 if y_off > 0 else 30
             ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=('bottom' if y_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color), fontsize=10, fontweight='bold', fontproperties=jp_font)
 
-    # --- 各ラインの間に3時間数値ガイドを追加 ---
+    # --- ライン間の3時間数値ガイド ---
     for y_idx in range(len(plot_order) - 1):
         strip_y = y_idx + 0.5
         ax.axhline(strip_y, color='#F5F5F5', linewidth=12, zorder=1)
@@ -232,6 +240,6 @@ if uploaded_file:
                 
                 out_excel = BytesIO(); wb.save(out_excel)
                 
-                st.success(f"✅ 生成完了 (174時間 / 3時間間隔ガイド)")
+                st.success("✅ 生成完了 (174時間 / 終点Ticks追加)")
                 st.download_button("📥 ダウンロード (Excel)", out_excel.getvalue(), f"Production_Report_{selected_week}.xlsx")
                 st.pyplot(fig)
