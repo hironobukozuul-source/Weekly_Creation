@@ -31,7 +31,7 @@ jp_font = setup_japanese_font()
 # --- 定数設定 ---
 NAME_MAP = {'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'}
 LINE_START_COLS = {'Pump': 2, 'Ref1': 11, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
-MON_START_TIME = datetime.time(3, 30) 
+DAY_CUTOFF = datetime.time(3, 30) # 一日の切り替わり（始業時刻）
 DATE_COL = 63
 MAINT_KEYWORDS = ['P/C', 'CLN', 'SETUP', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC', '原価改定', '段取', 'メンテナンス', '点検', '清掃', '切替', '予備', 'WAIT', 'SAMPLE']
 
@@ -42,13 +42,20 @@ def to_time(val):
         return datetime.time((ts // 3600) % 24, (ts // 60) % 60, ts % 60)
     return None
 
+def is_crossing_cutoff(last_t, next_t):
+    """直前の終了時刻と次の開始時刻の間に03:30(DAY_CUTOFF)があるか判定"""
+    if last_t == next_t: return False
+    # 例: last=02:45, next=03:30 -> True (03:30を跨いだ)
+    if last_t < DAY_CUTOFF <= next_t: return True
+    # 例: last=23:00, next=02:45 -> False (03:30に達していない)
+    return False
+
 @st.cache_data
 def get_available_weeks(df_raw):
     dates = pd.to_datetime(df_raw.iloc[3:, DATE_COL], errors='coerce').dropna()
     mondays = dates[dates.dt.weekday == 0].dt.date.unique()
     return sorted(mondays)
 
-# --- データ処理ロジック (Stateful + Monday Reset) ---
 def process_tasks(df_raw):
     tasks = []
     line_config = {}
@@ -66,9 +73,7 @@ def process_tasks(df_raw):
     for i in range(3, len(df_raw)):
         date_val = df_raw.iloc[i, DATE_COL]
         if not isinstance(date_val, (datetime.datetime, pd.Timestamp)): continue
-        
         base_date = date_val.date()
-        is_monday = (base_date.weekday() == 0)
 
         for line, cols in line_config.items():
             prod_raw, st_raw, fn_raw, tn_raw = df_raw.iloc[i, cols['prod']], df_raw.iloc[i, cols['start']], df_raw.iloc[i, cols['finish']], df_raw.iloc[i, cols['ton']]
@@ -79,23 +84,25 @@ def process_tasks(df_raw):
             
             s_t, f_t = to_time(st_raw), to_time(fn_raw)
             if s_t and f_t:
-                # ラインごとの状態初期化
                 if line not in line_states:
-                    line_states[line] = {'current_date': base_date, 'last_finish_time': datetime.time(0, 0), 'initialized': False}
+                    line_states[line] = {'current_date': base_date, 'last_finish_time': s_t, 'initialized': False}
 
-                # 月曜日リセットロジック: 最初の03:30以降のデータで週を開始
-                if is_monday and not line_states[line]['initialized']:
-                    if s_t >= MON_START_TIME:
+                # 月曜日リセット: 最初の03:30以降で週をスタート
+                if base_date.weekday() == 0 and not line_states[line]['initialized']:
+                    if s_t >= DAY_CUTOFF:
                         line_states[line]['current_date'] = base_date
                         line_states[line]['initialized'] = True
                     else:
-                        continue # 03:30以前のデータは無視
+                        continue
 
-                # ステートフル日付進行: 時刻が逆転したら翌日へ
-                if line_states[line]['initialized'] and s_t < line_states[line]['last_finish_time']:
-                    line_states[line]['current_date'] += datetime.timedelta(days=1)
+                # --- 修正された日付進行ロジック ---
+                # 1. 時刻の逆転 (例: 23:00 -> 01:00) 
+                # 2. または 03:30 境界を跨いだ (例: 02:45 -> 03:30)
+                if line_states[line]['initialized']:
+                    if (s_t < line_states[line]['last_finish_time']) or is_crossing_cutoff(line_states[line]['last_finish_time'], s_t):
+                        line_states[line]['current_date'] += datetime.timedelta(days=1)
                 
-                # Excel日付列との同期
+                # 日付列との整合性（BK列が明示的に進んでいる場合）
                 if base_date > line_states[line]['current_date']:
                     line_states[line]['current_date'] = base_date
 
@@ -115,7 +122,6 @@ def process_tasks(df_raw):
 
     return pd.DataFrame(tasks)
 
-# --- ガントチャート描画 ---
 def generate_plot(df_tasks, start_date):
     plot_start = datetime.datetime.combine(start_date, datetime.time(0, 0))
     plot_end = plot_start + datetime.timedelta(days=7)
@@ -127,7 +133,6 @@ def generate_plot(df_tasks, start_date):
     fig, ax = plt.subplots(figsize=(28, 14), facecolor='white')
     line_offset_state = {line: 30 for line in plot_order}
 
-    # 同一製品の結合
     merged = []
     for line_key in requested_order:
         line_df = df_tasks[df_tasks['Line'] == line_key].sort_values('Start')
@@ -154,14 +159,13 @@ def generate_plot(df_tasks, start_date):
                 else: ax.hlines(y, s, e, colors=color, linewidth=5, capstyle='butt', zorder=3)
         
         mid = mdates.date2num(max(camp['Start'], plot_start) + (min(camp['Finish'], plot_end) - max(camp['Start'], plot_start))/2)
-        if is_m: 
+        if is_m:
             ax.text(mid, y + 0.1, camp['Product'], ha='center', va='bottom', fontsize=9, color='#555555', fontweight='bold', fontproperties=jp_font)
         else:
             y_off = line_offset_state[line_name]
             line_offset_state[line_name] = -30 if y_off > 0 else 30
             ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=('bottom' if y_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color, connectionstyle='arc3'), fontsize=10, fontweight='bold', fontproperties=jp_font)
 
-    # 軸・グリッド設定
     ax.set_xlim(mdates.date2num(plot_start), mdates.date2num(plot_end))
     for i in range(9): ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=2, zorder=5)
     curr_h = plot_start
@@ -178,7 +182,6 @@ def generate_plot(df_tasks, start_date):
     buf = BytesIO(); plt.savefig(buf, format='png'); plt.close(); buf.seek(0)
     return buf, fig
 
-# --- Streamlit UI ---
 st.set_page_config(layout="wide", page_title="Production Planner")
 st.title("🏭 Production Plan Visualizer & Master Report")
 
@@ -200,9 +203,9 @@ if uploaded_file:
                 df_tasks = process_tasks(df_raw)
                 img_buf, fig = generate_plot(df_tasks, selected_week)
                 
-                # Excel生成 (Hourly Volume: 3:30から168時間)
+                # Excel生成 (Hourly Volume)
                 wb = openpyxl.Workbook(); ws_vol = wb.active; ws_vol.title = "Hourly_Volume"
-                start_dt_excel = datetime.datetime.combine(selected_week, MON_START_TIME)
+                start_dt_excel = datetime.datetime.combine(selected_week, DAY_CUTOFF)
                 hour_list = [start_dt_excel + datetime.timedelta(hours=h) for h in range(168)]
                 
                 thick_black = Side(style='thick', color='000000')
