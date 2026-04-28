@@ -140,30 +140,30 @@ def generate_plot(df_tasks, start_date):
             line_offset_state[line_name] = -30 if y_off > 0 else 30
             ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=('bottom' if y_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color), fontsize=10, fontweight='bold', fontproperties=jp_font)
 
-    # --- 各ラインの間に3時間ガイドを追加 ---
+    # --- 各ラインの間に3時間数値ガイドを追加 ---
     for y_idx in range(len(plot_order) - 1):
         strip_y = y_idx + 0.5
-        ax.axhline(strip_y, color='#F0F0F0', linewidth=12, zorder=1) # 少し太めのガイドライン
+        ax.axhline(strip_y, color='#F5F5F5', linewidth=12, zorder=1)
         for h_offset in range(0, TOTAL_HOURS, 3):
             t_mark = plot_start + datetime.timedelta(hours=h_offset)
             ax.text(mdates.date2num(t_mark), strip_y, f"{t_mark.hour}", color='#999999', fontsize=8, ha='center', va='center', zorder=2, fontweight='bold')
 
     ax.set_xlim(mdates.date2num(plot_start), mdates.date2num(plot_end))
-    # 日付区切り（赤線）
     for i in range(9): 
         ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=2, zorder=5)
     
-    # 1時間ごとの背景グリッド
     curr_h = plot_start
     while curr_h <= plot_end:
         ax.axvline(mdates.date2num(curr_h), color='#EEEEEE', linewidth=0.7, zorder=0)
         curr_h += datetime.timedelta(hours=1)
 
-    ax.xaxis.set_major_locator(mdates.DayLocator()); ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%m/%d (%a)'))
+    ax.xaxis.set_major_locator(mdates.DayLocator())
+    ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%m/%d (%a)'))
     ax.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 3, 6, 9, 12, 15, 18, 21]))
     ax.xaxis.set_minor_formatter(FuncFormatter(lambda x, pos: f"{mdates.num2date(x).hour}"))
     
-    ax.set_yticks(range(len(plot_order))); ax.set_yticklabels(plot_order, fontsize=12, fontweight='bold')
+    ax.set_yticks(range(len(plot_order)))
+    ax.set_yticklabels(plot_order, fontsize=12, fontweight='bold')
     ax.set_ylim(-0.8, len(plot_order) - 0.2)
     plt.title(f"Production Plan - Week of {start_date} (+6hrs)", fontsize=16, pad=40, fontproperties=jp_font)
     plt.tight_layout()
@@ -191,7 +191,7 @@ if uploaded_file:
                 df_tasks = process_tasks(df_raw)
                 img_buf, fig = generate_plot(df_tasks, selected_week)
                 
-                # --- Excel生成セクション ---
+                # --- Excel生成 ---
                 wb = openpyxl.Workbook(); ws_vol = wb.active; ws_vol.title = "Hourly_Volume"
                 start_dt_excel = datetime.datetime.combine(selected_week, datetime.time(0, 0))
                 hour_list = [start_dt_excel + datetime.timedelta(hours=h) for h in range(TOTAL_HOURS)]
@@ -232,4 +232,6 @@ if uploaded_file:
                 
                 out_excel = BytesIO(); wb.save(out_excel)
                 
-                st.success(f"✅ 生成完了 (174時間 /
+                st.success(f"✅ 生成完了 (174時間 / 3時間間隔ガイド)")
+                st.download_button("📥 ダウンロード (Excel)", out_excel.getvalue(), f"Production_Report_{selected_week}.xlsx")
+                st.pyplot(fig)
