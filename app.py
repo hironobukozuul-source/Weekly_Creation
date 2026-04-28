@@ -31,7 +31,6 @@ jp_font = setup_japanese_font()
 # --- 定数設定 ---
 NAME_MAP = {'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'}
 LINE_START_COLS = {'Pump': 2, 'Ref1': 11, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
-DAY_CUTOFF = datetime.time(3, 30) # 月曜日の集計開始時刻
 DATE_COL = 63
 MAINT_KEYWORDS = ['P/C', 'CLN', 'SETUP', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC', '原価改定', '段取', 'メンテナンス', '点検', '清掃', '切替', '予備', 'WAIT', 'SAMPLE']
 
@@ -77,31 +76,26 @@ def process_tasks(df_raw):
             s_t, f_t = to_time(st_raw), to_time(fn_raw)
             if s_t and f_t:
                 if line not in line_states:
-                    line_states[line] = {'current_date': base_date, 'last_finish_time': s_t, 'initialized': False}
+                    line_states[line] = {
+                        'current_date': base_date, 
+                        'last_start_time': s_t,
+                        'initialized': True
+                    }
 
-                # 月曜日リセット: 最初の03:30以降で週をスタート
-                if base_date.weekday() == 0 and not line_states[line]['initialized']:
-                    if s_t >= DAY_CUTOFF:
-                        line_states[line]['current_date'] = base_date
-                        line_states[line]['initialized'] = True
-                    else:
-                        continue
-
-                # --- 修正された日付進行ロジック (0:00境界) ---
-                if line_states[line]['initialized']:
-                    # 時刻の逆転 (例: 23:00 -> 01:00) が起きたら日付を1日進める
-                    if s_t < line_states[line]['last_finish_time']:
-                        line_states[line]['current_date'] += datetime.timedelta(days=1)
+                # --- 改良された日付進行ロジック ---
+                # 現在の開始時刻が前の開始時刻より数値的に小さい場合（例：23:00 -> 02:00）、0:00を跨いだと判断
+                if s_t < line_states[line]['last_start_time']:
+                    line_states[line]['current_date'] += datetime.timedelta(days=1)
                 
-                # 日付列（BK列）との整合性チェック
+                # BK列（日付列）が内部計算より進んでいる場合は同期させる
                 if base_date > line_states[line]['current_date']:
                     line_states[line]['current_date'] = base_date
 
                 dt_s = datetime.datetime.combine(line_states[line]['current_date'], s_t)
                 dt_f = datetime.datetime.combine(line_states[line]['current_date'], f_t)
                 
-                # 作業単体での日付跨ぎ（例：23:00開始、02:00終了）
-                if f_t <= s_t:
+                # 単一の作業内で0:00を跨ぐ場合（例：22:15開始 -> 01:15終了）
+                if f_t < s_t:
                     dt_f += datetime.timedelta(days=1)
                 
                 try: ton = float(tn_raw) if pd.notna(tn_raw) else 0.0
@@ -110,12 +104,13 @@ def process_tasks(df_raw):
                 is_m = (ton <= 0) or any(kw.upper() in product.upper() for kw in MAINT_KEYWORDS)
                 tasks.append({'Line': line, 'Product': product, 'Start': dt_s, 'Finish': dt_f, 'Ton': ton, 'is_maint': is_m})
                 
-                # 次の判定のために終了時刻を保存
-                line_states[line]['last_finish_time'] = f_t
+                # 次の判定用に現在の開始時刻を保存
+                line_states[line]['last_start_time'] = s_t
 
     return pd.DataFrame(tasks)
 
 def generate_plot(df_tasks, start_date):
+    # 0:00から開始するように修正
     plot_start = datetime.datetime.combine(start_date, datetime.time(0, 0))
     plot_end = plot_start + datetime.timedelta(days=7)
     
@@ -160,14 +155,18 @@ def generate_plot(df_tasks, start_date):
             ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=('bottom' if y_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color, connectionstyle='arc3'), fontsize=10, fontweight='bold', fontproperties=jp_font)
 
     ax.set_xlim(mdates.date2num(plot_start), mdates.date2num(plot_end))
-    for i in range(9): ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=2, zorder=5)
+    for i in range(8): ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=2, zorder=5)
+    
     curr_h = plot_start
     while curr_h <= plot_end:
         ax.axvline(mdates.date2num(curr_h), color='#EEEEEE', linewidth=0.7, zorder=1)
         curr_h += datetime.timedelta(hours=1)
+
     ax.xaxis.set_major_locator(mdates.DayLocator()); ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%m/%d (%a)'))
-    ax.xaxis.set_minor_locator(plt.FixedLocator([mdates.date2num(plot_start + datetime.timedelta(hours=3*i)) for i in range(57)]))
+    # 0:00, 3:00, 6:00 ... と綺麗に並ぶように locator を設定
+    ax.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 3, 6, 9, 12, 15, 18, 21]))
     ax.xaxis.set_minor_formatter(FuncFormatter(lambda x, pos: f"{mdates.num2date(x).hour}"))
+    
     ax.set_yticks(range(len(plot_order))); ax.set_yticklabels(plot_order, fontsize=12, fontweight='bold')
     ax.set_ylim(-0.8, len(plot_order) - 0.2)
     plt.title(f"Production Plan - Week of {start_date}", fontsize=16, pad=40, fontproperties=jp_font)
@@ -196,9 +195,9 @@ if uploaded_file:
                 df_tasks = process_tasks(df_raw)
                 img_buf, fig = generate_plot(df_tasks, selected_week)
                 
-                # Excel生成 (Hourly Volume)
+                # Excel生成 (Hourly Volume) - 0:00から開始するように修正
                 wb = openpyxl.Workbook(); ws_vol = wb.active; ws_vol.title = "Hourly_Volume"
-                start_dt_excel = datetime.datetime.combine(selected_week, DAY_CUTOFF)
+                start_dt_excel = datetime.datetime.combine(selected_week, datetime.time(0, 0))
                 hour_list = [start_dt_excel + datetime.timedelta(hours=h) for h in range(168)]
                 
                 thick_black = Side(style='thick', color='000000')
@@ -222,9 +221,10 @@ if uploaded_file:
                             cell = ws_vol.cell(row_num, 3 + c_idx, round(ton_sum, 2))
                             cell.fill = PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")
 
+                # 日付の区切り線（0:00に太線を引く）
                 for col_idx in range(3, ws_vol.max_column + 1):
                     header = str(ws_vol.cell(1, col_idx).value)
-                    if "03:30" in header:
+                    if "00:00" in header:
                         for r in range(1, ws_vol.max_row + 1):
                             ws_vol.cell(r, col_idx).border = Border(left=thick_black)
 
