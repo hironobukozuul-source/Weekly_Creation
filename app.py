@@ -8,8 +8,6 @@ import matplotlib.dates as mdates
 from matplotlib import font_manager
 from matplotlib.ticker import FuncFormatter
 from matplotlib.patches import Rectangle
-import openpyxl
-from openpyxl.styles import Border, Side, Font, Alignment, PatternFill
 from io import BytesIO
 import os
 import requests
@@ -60,7 +58,6 @@ def process_tasks(df_raw):
                 found_ton_col = c
                 break
         line_config[line] = {'prod': start_idx, 'start': start_idx+2, 'finish': start_idx+3, 'ton': found_ton_col or (start_idx+4)}
-
     line_states = {}
     for i in range(3, len(df_raw)):
         date_val = df_raw.iloc[i, DATE_COL]
@@ -96,13 +93,14 @@ def generate_plot(df_tasks, start_date):
     plot_order = [NAME_MAP[n] for n in requested_order[::-1]]
     line_to_y = {NAME_MAP[n]: i for i, n in enumerate(requested_order[::-1])}
 
+    # 1. フィギュアサイズ・余白 (30x20, top=0.82)
     fig, ax = plt.subplots(figsize=(30, 20), facecolor='white')
     plt.subplots_adjust(top=0.82, bottom=0.08, left=0.08, right=0.95)
     
-    # テキスト重なり防止：オフセットを広げる (65px)
-    line_offset_state = {line: 65 for line in plot_order}
+    # --- 修正箇所：ラベルのオフセットを ±30 に設定 ---
+    line_offset_state = {line: 30 for line in plot_order}
 
-    # タスクマージ
+    # タスクマージロジック
     merged = []
     for line_key in requested_order:
         line_df = df_tasks[df_tasks['Line'] == line_key].sort_values('Start')
@@ -136,14 +134,12 @@ def generate_plot(df_tasks, start_date):
         
         mid = mdates.date2num(max(camp['Start'], plot_start) + (min(camp['Finish'], plot_end) - max(camp['Start'], plot_start))/2)
         
-        # ラベル表示（メンテナンスも生産も両方表示）
+        # ラベル表示（±30オフセット適用）
         if is_m:
-            # メンテナンスはラインの少し上にテキスト表示
-            ax.text(mid, y + 0.18, camp['Product'], ha='center', va='bottom', fontsize=11, color='#555555', fontweight='bold', fontproperties=jp_font, zorder=5)
+            ax.text(mid, y + 0.15, camp['Product'], ha='center', va='bottom', fontsize=11, color='#555555', fontweight='bold', fontproperties=jp_font, zorder=5)
         else:
-            # 生産品目はボックス表示（交互に上下に配置して重なり回避）
             y_off = line_offset_state[line_name]
-            line_offset_state[line_name] = -65 if y_off > 0 else 65
+            line_offset_state[line_name] = -30 if y_off > 0 else 30 # ここで±30
             ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=('bottom' if y_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1.5, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color, lw=1), fontsize=11, fontweight='bold', fontproperties=jp_font, zorder=6)
 
     # ガイド数値
@@ -183,14 +179,14 @@ def generate_plot(df_tasks, start_date):
 
 # --- UI ---
 st.set_page_config(layout="wide", page_title="Production Plan Visualizer")
-st.title("🏭 Weekly Production Master Report")
+st.title("🏭 Weekly Production Master Report Generator")
 uploaded_file = st.file_uploader("Excelファイルをアップロード (.xlsm)", type=["xlsm"])
 if uploaded_file:
     df_raw = pd.read_excel(uploaded_file, sheet_name='Fill', header=None)
     available_weeks = get_available_weeks(df_raw)
     if available_weeks:
         selected_week = st.selectbox("対象週を選択", available_weeks)
-        if st.button("🚀 生成"):
+        if st.button("🚀 生成開始"):
             with st.spinner('作成中...'):
                 df_tasks = process_tasks(df_raw)
                 img_buf, fig = generate_plot(df_tasks, selected_week)
