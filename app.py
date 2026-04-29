@@ -8,11 +8,12 @@ import matplotlib.dates as mdates
 from matplotlib import font_manager
 from matplotlib.ticker import FuncFormatter
 from matplotlib.patches import Rectangle
+import openpyxl
 from io import BytesIO
 import os
 import requests
 
-# --- フォント設定 ---
+# --- フォント設定 (日本語・特殊文字表示用) ---
 def setup_japanese_font():
     font_path = "NotoSansJP-Regular.ttf"
     if not os.path.exists(font_path):
@@ -28,10 +29,19 @@ def setup_japanese_font():
 jp_font = setup_japanese_font()
 
 # --- 定数設定 ---
-NAME_MAP = {'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'}
-LINE_START_COLS = {'Pump': 2, 'Ref1': 11, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
+NAME_MAP = {
+    'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 
+    'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'
+}
+LINE_START_COLS = {
+    'Pump': 2, 'Ref1': 11, 'Flexible': 20, 
+    'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56
+}
 DATE_COL = 63
-MAINT_KEYWORDS = ['P/C', 'CLN', 'SETUP', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC', '原価改定', '段取', 'メンテナンス', '点検', '清掃', '切替', '予備', 'WAIT', 'SAMPLE']
+MAINT_KEYWORDS = [
+    'P/C', 'CLN', 'SETUP', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC', 
+    '原価改定', '段取', 'メンテナンス', '点検', '清掃', '切替', '予備', 'WAIT', 'SAMPLE'
+]
 TOTAL_HOURS = 174 
 
 def to_time(val):
@@ -58,6 +68,7 @@ def process_tasks(df_raw):
                 found_ton_col = c
                 break
         line_config[line] = {'prod': start_idx, 'start': start_idx+2, 'finish': start_idx+3, 'ton': found_ton_col or (start_idx+4)}
+    
     line_states = {}
     for i in range(3, len(df_raw)):
         date_val = df_raw.iloc[i, DATE_COL]
@@ -93,14 +104,15 @@ def generate_plot(df_tasks, start_date):
     plot_order = [NAME_MAP[n] for n in requested_order[::-1]]
     line_to_y = {NAME_MAP[n]: i for i, n in enumerate(requested_order[::-1])}
 
+    # 1. フィギュアサイズ (30x20)
     fig, ax = plt.subplots(figsize=(30, 20), facecolor='white')
     plt.subplots_adjust(top=0.82, bottom=0.08, left=0.08, right=0.95)
     
-    # 状態管理：ボックス用(±30)と、テキスト用(±0.05)
+    # オフセット管理用
     box_offset_state = {line: 30 for line in plot_order}
     text_offset_state = {line: 0.05 for line in plot_order}
 
-    # タスクマージ
+    # タスクマージ処理
     merged = []
     for line_key in requested_order:
         line_df = df_tasks[df_tasks['Line'] == line_key].sort_values('Start')
@@ -122,31 +134,29 @@ def generate_plot(df_tasks, start_date):
         line_name = NAME_MAP[camp['Line']]
         y, is_m, color = line_to_y[line_name], camp['is_maint'], ('#7F7F7F' if camp['is_maint'] else '#1F4E78')
         
-        # 描画
         for s_dt, f_dt in camp['Segments']:
             s, e = max(mdates.date2num(s_dt), mdates.date2num(plot_start)), min(mdates.date2num(f_dt), mdates.date2num(plot_end))
             if e > s:
                 if is_m: 
-                    ax.hlines(y, s, e, colors=color, linestyles='dotted', linewidth=3.5, zorder=3)
+                    ax.hlines(y, s, e, colors=color, linestyles='dotted', linewidth=4.0, zorder=3)
                 else: 
-                    ax.hlines(y, s, e, colors=color, linewidth=11, capstyle='butt', zorder=3)
+                    ax.hlines(y, s, e, colors=color, linewidth=12, capstyle='butt', zorder=3)
                 ax.vlines(e, y - tick_half_h, y + tick_half_h, colors=color, linewidth=2.0, zorder=4)
         
         mid = mdates.date2num(max(camp['Start'], plot_start) + (min(camp['Finish'], plot_end) - max(camp['Start'], plot_start))/2)
         
         if is_m:
-            # メンテナンス用：±0.05 の位置にテキストを表示 (交互切り替え)
+            # メンテナンス：±0.05 でライン際へ (交互配置)
             y_text_off = text_offset_state[line_name]
             text_offset_state[line_name] = -0.05 if y_text_off > 0 else 0.05
-            v_align = 'bottom' if y_text_off > 0 else 'top'
-            ax.text(mid, y + y_text_off, camp['Product'], ha='center', va=v_align, fontsize=11, color='#555555', fontweight='bold', fontproperties=jp_font, zorder=5)
+            ax.text(mid, y + y_text_off, camp['Product'], ha='center', va=('bottom' if y_text_off > 0 else 'top'), fontsize=11, color='#555555', fontweight='bold', fontproperties=jp_font, zorder=5)
         else:
-            # 製品用：±30 ポイントのボックス表示 (交互切り替え)
+            # 製品：±30 ポイントでボックス表示 (交互配置)
             y_box_off = box_offset_state[line_name]
             box_offset_state[line_name] = -30 if y_box_off > 0 else 30
             ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_box_off), textcoords='offset points', ha='center', va=('bottom' if y_box_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1.5, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color, lw=1), fontsize=11, fontweight='bold', fontproperties=jp_font, zorder=6)
 
-    # ガイド数値、軸、タイトル、承認ボックスの設定 (変更なし)
+    # 3時間ガイド数値
     for y_idx in range(len(plot_order) - 1):
         strip_y = y_idx + 0.5
         ax.axhline(strip_y, color='#F5F5F5', linewidth=20, zorder=1)
@@ -154,6 +164,7 @@ def generate_plot(df_tasks, start_date):
             t_mark = plot_start + datetime.timedelta(hours=h_offset)
             ax.text(mdates.date2num(t_mark), strip_y, f"{t_mark.hour}", color='#999999', fontsize=10, ha='center', va='center', zorder=2, fontweight='bold')
 
+    # 軸設定
     ax.set_xlim(mdates.date2num(plot_start), mdates.date2num(plot_end))
     ax.xaxis.set_major_locator(mdates.DayLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%m/%d (%a)'))
@@ -162,10 +173,12 @@ def generate_plot(df_tasks, start_date):
     ax.set_yticks(range(len(plot_order)))
     ax.set_yticklabels(plot_order, fontsize=16, fontweight='bold')
     ax.set_ylim(-0.8, 6.8)
-    for i in range(9): ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=3, zorder=5)
+    for i in range(9): ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.3, linewidth=3, zorder=5)
 
+    # 巨大タイトル (48pt)
     ax.text(0.5, 1.12, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
     
+    # 承認ボックス (PM & SV)
     box_w, box_h = 0.033, 0.05
     pos_y = 0.88
     new_pm_x, new_sv_x = 0.883 - 0.011, 0.833 - 0.011 
@@ -174,21 +187,42 @@ def generate_plot(df_tasks, start_date):
     fig.patches.append(Rectangle((new_pm_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=2))
     fig.text(new_pm_x + (box_w/2), pos_y + box_h + 0.005, 'PM', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=16)
 
-    buf = BytesIO(); plt.savefig(buf, format='png'); plt.close(); buf.seek(0)
-    return buf, fig
+    buf = BytesIO()
+    plt.savefig(buf, format='png', bbox_inches=None)
+    plt.close()
+    buf.seek(0)
+    return buf
 
-# --- UI ---
+# --- UI / メインロジック ---
 st.set_page_config(layout="wide", page_title="Production Plan Visualizer")
 st.title("🏭 Weekly Production Master Report Generator")
 uploaded_file = st.file_uploader("Excelファイルをアップロード (.xlsm)", type=["xlsm"])
+
 if uploaded_file:
     df_raw = pd.read_excel(uploaded_file, sheet_name='Fill', header=None)
     available_weeks = get_available_weeks(df_raw)
     if available_weeks:
         selected_week = st.selectbox("対象週を選択", available_weeks)
         if st.button("🚀 生成開始"):
-            with st.spinner('作成中...'):
+            with st.spinner('レポートを作成中...'):
                 df_tasks = process_tasks(df_raw)
-                img_buf, fig = generate_plot(df_tasks, selected_week)
+                img_buf = generate_plot(df_tasks, selected_week)
+                
+                # --- Excel生成 ---
+                wb = openpyxl.Workbook()
+                ws = wb.active
+                ws.title = "Visual_Schedule"
+                img_for_excel = BytesIO(img_buf.getvalue())
+                ws.add_image(openpyxl.drawing.image.Image(img_for_excel), 'B2')
+                out_excel = BytesIO()
+                wb.save(out_excel)
+                
+                # --- プレビュー表示 ---
                 st.image(img_buf, use_container_width=True)
-                st.download_button("📥 画像をダウンロード", img_buf.getvalue(), "gantt.png")
+                
+                # --- ダウンロードボタン ---
+                c1, c2 = st.columns(2)
+                with c1:
+                    st.download_button("📥 Excelをダウンロード", out_excel.getvalue(), f"Production_Plan_{selected_week}.xlsx")
+                with c2:
+                    st.download_button("🖼️ 画像のみ保存", img_buf.getvalue(), f"Gantt_{selected_week}.png")
