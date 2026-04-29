@@ -70,10 +70,8 @@ def process_tasks(df_raw):
         for line, cols in line_config.items():
             prod_raw, st_raw, fn_raw, tn_raw = df_raw.iloc[i, cols['prod']], df_raw.iloc[i, cols['start']], df_raw.iloc[i, cols['finish']], df_raw.iloc[i, cols['ton']]
             if pd.isna(st_raw) or pd.isna(fn_raw) or pd.isna(prod_raw): continue
-            
             product = str(prod_raw).strip()
             if product.lower() in ['nan', '連操なし', '']: continue
-            
             s_t, f_t = to_time(st_raw), to_time(fn_raw)
             if s_t and f_t:
                 if line not in line_states:
@@ -82,14 +80,11 @@ def process_tasks(df_raw):
                     line_states[line]['current_date'] += datetime.timedelta(days=1)
                 if base_date > line_states[line]['current_date']:
                     line_states[line]['current_date'] = base_date
-
                 dt_s = datetime.datetime.combine(line_states[line]['current_date'], s_t)
                 dt_f = datetime.datetime.combine(line_states[line]['current_date'], f_t)
                 if f_t < s_t: dt_f += datetime.timedelta(days=1)
-                
                 try: ton = float(tn_raw) if pd.notna(tn_raw) else 0.0
                 except: ton = 0.0
-                
                 is_m = (ton <= 0) or any(kw.upper() in product.upper() for kw in MAINT_KEYWORDS)
                 tasks.append({'Line': line, 'Product': product, 'Start': dt_s, 'Finish': dt_f, 'Ton': ton, 'is_maint': is_m})
                 line_states[line]['last_start_time'] = s_t
@@ -98,17 +93,17 @@ def process_tasks(df_raw):
 def generate_plot(df_tasks, start_date):
     plot_start = datetime.datetime.combine(start_date, datetime.time(0, 0))
     plot_end = plot_start + datetime.timedelta(hours=TOTAL_HOURS)
-    
     requested_order = ['Pump', 'Ref1', 'Flexible', 'Ref3', 'Ref4', 'Ref5', 'Awa']
     plot_order = [NAME_MAP[n] for n in requested_order[::-1]]
     line_to_y = {NAME_MAP[n]: i for i, n in enumerate(requested_order[::-1])}
 
-    # 1. フィギュアサイズの拡大 (30x16) と上部バッファ (top=0.85)
+    # 1. フィギュアサイズと余白の固定 (tight_layoutは使用しない)
     fig, ax = plt.subplots(figsize=(30, 16), facecolor='white')
-    plt.subplots_adjust(top=0.85)
+    plt.subplots_adjust(top=0.82, bottom=0.1, left=0.08, right=0.95)
     
     line_offset_state = {line: 35 for line in plot_order}
 
+    # タスクの描画
     merged = []
     for line_key in requested_order:
         line_df = df_tasks[df_tasks['Line'] == line_key].sort_values('Start')
@@ -125,31 +120,26 @@ def generate_plot(df_tasks, start_date):
         merged.append(curr)
 
     tick_half_h = 0.05 
-
     for camp in merged:
         if camp['Finish'] < plot_start or camp['Start'] > plot_end: continue
         line_name = NAME_MAP[camp['Line']]
         y, is_m, color = line_to_y[line_name], camp['is_maint'], ('#7F7F7F' if camp['is_maint'] else '#1F4E78')
-        
         for s_dt, f_dt in camp['Segments']:
             s, e = max(mdates.date2num(s_dt), mdates.date2num(plot_start)), min(mdates.date2num(f_dt), mdates.date2num(plot_end))
             if e > s:
                 if is_m: 
                     ax.hlines(y, s, e, colors=color, linestyles='dotted', linewidth=3.0, zorder=3)
-                    ax.vlines(e, y - tick_half_h, y + tick_half_h, colors=color, linewidth=1.5, zorder=4)
                 else: 
                     ax.hlines(y, s, e, colors=color, linewidth=8, capstyle='butt', zorder=3)
-                    ax.vlines(e, y - tick_half_h, y + tick_half_h, colors=color, linewidth=2.0, zorder=4)
+                ax.vlines(e, y - tick_half_h, y + tick_half_h, colors=color, linewidth=2.0, zorder=4)
         
         mid = mdates.date2num(max(camp['Start'], plot_start) + (min(camp['Finish'], plot_end) - max(camp['Start'], plot_start))/2)
-        if is_m:
-            ax.text(mid, y + 0.15, camp['Product'], ha='center', va='bottom', fontsize=10, color='#555555', fontweight='bold', fontproperties=jp_font)
-        else:
+        if not is_m:
             y_off = line_offset_state[line_name]
             line_offset_state[line_name] = -40 if y_off > 0 else 40
             ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=('bottom' if y_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1.2, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color), fontsize=11, fontweight='bold', fontproperties=jp_font)
 
-    # 2. ライン間の3時間数値ガイド (上下端の帯は削除)
+    # 2. ライン間の数値ガイド
     for y_idx in range(len(plot_order) - 1):
         strip_y = y_idx + 0.5
         ax.axhline(strip_y, color='#F5F5F5', linewidth=15, zorder=1)
@@ -157,46 +147,40 @@ def generate_plot(df_tasks, start_date):
             t_mark = plot_start + datetime.timedelta(hours=h_offset)
             ax.text(mdates.date2num(t_mark), strip_y, f"{t_mark.hour}", color='#999999', fontsize=9, ha='center', va='center', zorder=2, fontweight='bold')
 
+    # 軸設定
     ax.set_xlim(mdates.date2num(plot_start), mdates.date2num(plot_end))
-    for i in range(9): 
-        ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=2.5, zorder=5)
-    
-    # 3. x軸の時間を維持
     ax.xaxis.set_major_locator(mdates.DayLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%m/%d (%a)'))
     ax.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 3, 6, 9, 12, 15, 18, 21]))
     ax.xaxis.set_minor_formatter(FuncFormatter(lambda x, pos: f"{mdates.num2date(x).hour}"))
-    
     ax.set_yticks(range(len(plot_order)))
     ax.set_yticklabels(plot_order, fontsize=14, fontweight='bold')
-    ax.set_ylim(-0.4, 6.4)
+    ax.set_ylim(-0.6, 6.6)
     
-    # 4. タイトルの巨大化 (32pt) と位置調整
-    plt.title(f"Production Plan - Week of {start_date} (+6hrs)", fontsize=32, pad=60, fontproperties=jp_font, fontweight='bold')
+    # 3. タイトルの設定 (フォントサイズ32を確実に反映)
+    ax.text(0.5, 1.12, f"Production Plan - Week of {start_date} (+6hrs)", 
+            transform=ax.transAxes, fontsize=40, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
     
-    # 5. 承認ボックス (PM & SV) の配置 - 合計330px左、50px下へ調整
+    # 4. 承認ボックス (PM & SV) - チャート外に絶対座標で配置
+    # 330px左、50px下の計算値を適用
     box_w, box_h = 0.033, 0.0625
-    pos_y = 0.869  # 50px分下げた位置
-    # 左への移動を反映したX座標
-    new_pm_x = 0.883 - 0.01 
-    new_sv_x = 0.833 - 0.01 
+    pos_y = 0.86  
+    new_pm_x = 0.883 - 0.011 # 330px相当のオフセット
+    new_sv_x = 0.833 - 0.011 
 
     # SV Box
-    rect_sv = Rectangle((new_sv_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=1.5, zorder=10)
-    fig.patches.append(rect_sv)
-    fig.text(new_sv_x + (box_w/2), pos_y + box_h + 0.01, 'SV', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=12, zorder=11)
+    fig.patches.append(Rectangle((new_sv_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=2, zorder=20))
+    fig.text(new_sv_x + (box_w/2), pos_y + box_h + 0.005, 'SV', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=14, zorder=21)
     # PM Box
-    rect_pm = Rectangle((new_pm_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=1.5, zorder=10)
-    fig.patches.append(rect_pm)
-    fig.text(new_pm_x + (box_w/2), pos_y + box_h + 0.01, 'PM', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=12, zorder=11)
+    fig.patches.append(Rectangle((new_pm_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=2, zorder=20))
+    fig.text(new_pm_x + (box_w/2), pos_y + box_h + 0.005, 'PM', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=14, zorder=21)
 
-    plt.tight_layout()
-    buf = BytesIO(); plt.savefig(buf, format='png'); plt.close(); buf.seek(0)
+    buf = BytesIO(); plt.savefig(buf, format='png', bbox_inches=None); plt.close(); buf.seek(0)
     return buf, fig
 
 # --- Streamlit UI ---
 st.set_page_config(layout="wide", page_title="Production Planner")
-st.title("🏭 Production Plan Visualizer & Master Report")
+st.title("🏭 Production Plan Visualizer")
 
 uploaded_file = st.file_uploader("Excelファイルをアップロード (.xlsm)", type=["xlsm"])
 
@@ -205,55 +189,19 @@ if uploaded_file:
     available_weeks = get_available_weeks(df_raw)
     
     if available_weeks:
-        col1, col2 = st.columns([1, 2])
-        with col1: selected_week = st.selectbox("開始日（月曜日）を選択", available_weeks)
-        with col2:
-            st.write(" ")
-            generate_btn = st.button("🚀 Generate Plan & Excel", use_container_width=True)
-
-        if generate_btn:
+        selected_week = st.selectbox("開始日を選択", available_weeks)
+        if st.button("🚀 生成開始", use_container_width=True):
             with st.spinner('処理中...'):
                 df_tasks = process_tasks(df_raw)
                 img_buf, fig = generate_plot(df_tasks, selected_week)
                 
-                wb = openpyxl.Workbook(); ws_vol = wb.active; ws_vol.title = "Hourly_Volume"
-                start_dt_excel = datetime.datetime.combine(selected_week, datetime.time(0, 0))
-                hour_list = [start_dt_excel + datetime.timedelta(hours=h) for h in range(TOTAL_HOURS)]
-                thick_black = Side(style='thick', color='000000')
-                ws_vol.cell(1, 1, "Line").font = Font(bold=True)
-                ws_vol.cell(1, 2, "Product").font = Font(bold=True)
-                
-                for i, h_dt in enumerate(hour_list):
-                    next_h = h_dt + datetime.timedelta(hours=1)
-                    header_str = f"{h_dt.strftime('%m/%d %H:%M')}~{next_h.strftime('%H:%M')}"
-                    cell = ws_vol.cell(1, 3 + i, header_str)
-                    cell.font = Font(bold=True); cell.alignment = Alignment(text_rotation=90, horizontal='center')
-
-                clean_tasks = df_tasks[~df_tasks['is_maint']]
-                unique_items = sorted(list(set(zip(clean_tasks['Line'], clean_tasks['Product']))))
-
-                for r_idx, (line, product) in enumerate(unique_items):
-                    row_num = r_idx + 2
-                    ws_vol.cell(row_num, 1, line); ws_vol.cell(row_num, 2, product)
-                    for c_idx, h_dt in enumerate(hour_list):
-                        h_end = h_dt + datetime.timedelta(hours=1)
-                        overlap_tasks = clean_tasks[(clean_tasks['Line'] == line) & (clean_tasks['Product'] == product)]
-                        ton_sum = sum(t['Ton'] * ((min(t['Finish'], h_end) - max(t['Start'], h_dt)).total_seconds() / (t['Finish'] - t['Start']).total_seconds()) for _, t in overlap_tasks.iterrows() if (min(t['Finish'], h_end) - max(t['Start'], h_dt)).total_seconds() > 0)
-                        if ton_sum > 0:
-                            cell = ws_vol.cell(row_num, 3 + c_idx, round(ton_sum, 2))
-                            cell.fill = PatternFill(start_color="D9EAD3", end_color="D9EAD3", fill_type="solid")
-
-                for col_idx in range(3, ws_vol.max_column + 1):
-                    header = str(ws_vol.cell(1, col_idx).value)
-                    if "00:00" in header:
-                        for r in range(1, ws_vol.max_row + 1):
-                            ws_vol.cell(r, col_idx).border = Border(left=thick_black)
-
-                ws_vis = wb.create_sheet("Visual_Schedule")
+                # Excel/Image出力
+                wb = openpyxl.Workbook()
+                ws_vis = wb.active; ws_vis.title = "Visual_Schedule"
                 img_copy = BytesIO(img_buf.getvalue())
                 ws_vis.add_image(openpyxl.drawing.image.Image(img_copy), 'B2')
                 out_excel = BytesIO(); wb.save(out_excel)
                 
                 st.success("✅ 生成完了")
-                st.download_button("📥 ダウンロード (Excel)", out_excel.getvalue(), f"Production_Report_{selected_week}.xlsx")
-                st.pyplot(fig)
+                st.download_button("📥 ダウンロード", out_excel.getvalue(), f"Report_{selected_week}.xlsx")
+                st.image(img_buf)
