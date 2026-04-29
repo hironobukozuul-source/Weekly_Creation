@@ -7,6 +7,7 @@ import matplotlib.pyplot as plt
 import matplotlib.dates as mdates
 from matplotlib import font_manager
 from matplotlib.ticker import FuncFormatter
+from matplotlib.patches import Rectangle
 import openpyxl
 from openpyxl.styles import Border, Side, Font, Alignment, PatternFill
 from io import BytesIO
@@ -77,10 +78,8 @@ def process_tasks(df_raw):
             if s_t and f_t:
                 if line not in line_states:
                     line_states[line] = {'current_date': base_date, 'last_start_time': s_t}
-
                 if s_t < line_states[line]['last_start_time']:
                     line_states[line]['current_date'] += datetime.timedelta(days=1)
-                
                 if base_date > line_states[line]['current_date']:
                     line_states[line]['current_date'] = base_date
 
@@ -104,8 +103,11 @@ def generate_plot(df_tasks, start_date):
     plot_order = [NAME_MAP[n] for n in requested_order[::-1]]
     line_to_y = {NAME_MAP[n]: i for i, n in enumerate(requested_order[::-1])}
 
-    fig, ax = plt.subplots(figsize=(30, 14), facecolor='white')
-    line_offset_state = {line: 30 for line in plot_order}
+    # 1. フィギュアサイズの拡大 (30x16) と上部バッファ (top=0.85)
+    fig, ax = plt.subplots(figsize=(30, 16), facecolor='white')
+    plt.subplots_adjust(top=0.85)
+    
+    line_offset_state = {line: 35 for line in plot_order}
 
     merged = []
     for line_key in requested_order:
@@ -122,7 +124,6 @@ def generate_plot(df_tasks, start_date):
                 merged.append(curr); curr = nxt; curr['Segments'], curr['TotalTon'] = [(curr['Start'], curr['Finish'])], curr['Ton']
         merged.append(curr)
 
-    # Tickの高さ設定: トータル0.1 (y ± 0.05)
     tick_half_h = 0.05 
 
     for camp in merged:
@@ -134,52 +135,66 @@ def generate_plot(df_tasks, start_date):
             s, e = max(mdates.date2num(s_dt), mdates.date2num(plot_start)), min(mdates.date2num(f_dt), mdates.date2num(plot_end))
             if e > s:
                 if is_m: 
-                    ax.hlines(y, s, e, colors=color, linestyles='dotted', linewidth=2.5, zorder=3)
-                    # メンテナンス用Tick
-                    ax.vlines(e, y - tick_half_h, y + tick_half_h, colors=color, linewidth=1.2, zorder=4)
+                    ax.hlines(y, s, e, colors=color, linestyles='dotted', linewidth=3.0, zorder=3)
+                    ax.vlines(e, y - tick_half_h, y + tick_half_h, colors=color, linewidth=1.5, zorder=4)
                 else: 
-                    ax.hlines(y, s, e, colors=color, linewidth=5, capstyle='butt', zorder=3)
-                    # 生産用Tick
-                    ax.vlines(e, y - tick_half_h, y + tick_half_h, colors=color, linewidth=1.8, zorder=4)
+                    ax.hlines(y, s, e, colors=color, linewidth=8, capstyle='butt', zorder=3)
+                    ax.vlines(e, y - tick_half_h, y + tick_half_h, colors=color, linewidth=2.0, zorder=4)
         
         mid = mdates.date2num(max(camp['Start'], plot_start) + (min(camp['Finish'], plot_end) - max(camp['Start'], plot_start))/2)
         if is_m:
-            ax.text(mid, y + 0.1, camp['Product'], ha='center', va='bottom', fontsize=9, color='#555555', fontweight='bold', fontproperties=jp_font)
+            ax.text(mid, y + 0.15, camp['Product'], ha='center', va='bottom', fontsize=10, color='#555555', fontweight='bold', fontproperties=jp_font)
         else:
             y_off = line_offset_state[line_name]
-            line_offset_state[line_name] = -30 if y_off > 0 else 30
-            ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=('bottom' if y_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color), fontsize=10, fontweight='bold', fontproperties=jp_font)
+            line_offset_state[line_name] = -40 if y_off > 0 else 40
+            ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=('bottom' if y_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1.2, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color), fontsize=11, fontweight='bold', fontproperties=jp_font)
 
-    # --- ライン間の3時間数値ガイド ---
+    # 2. ライン間の3時間数値ガイド (上下端の帯は削除)
     for y_idx in range(len(plot_order) - 1):
         strip_y = y_idx + 0.5
-        ax.axhline(strip_y, color='#F5F5F5', linewidth=12, zorder=1)
+        ax.axhline(strip_y, color='#F5F5F5', linewidth=15, zorder=1)
         for h_offset in range(0, TOTAL_HOURS, 3):
             t_mark = plot_start + datetime.timedelta(hours=h_offset)
-            ax.text(mdates.date2num(t_mark), strip_y, f"{t_mark.hour}", color='#999999', fontsize=8, ha='center', va='center', zorder=2, fontweight='bold')
+            ax.text(mdates.date2num(t_mark), strip_y, f"{t_mark.hour}", color='#999999', fontsize=9, ha='center', va='center', zorder=2, fontweight='bold')
 
     ax.set_xlim(mdates.date2num(plot_start), mdates.date2num(plot_end))
     for i in range(9): 
-        ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=2, zorder=5)
+        ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=2.5, zorder=5)
     
-    curr_h = plot_start
-    while curr_h <= plot_end:
-        ax.axvline(mdates.date2num(curr_h), color='#EEEEEE', linewidth=0.7, zorder=0)
-        curr_h += datetime.timedelta(hours=1)
-
+    # 3. x軸の時間を維持
     ax.xaxis.set_major_locator(mdates.DayLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%m/%d (%a)'))
     ax.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 3, 6, 9, 12, 15, 18, 21]))
     ax.xaxis.set_minor_formatter(FuncFormatter(lambda x, pos: f"{mdates.num2date(x).hour}"))
     
     ax.set_yticks(range(len(plot_order)))
-    ax.set_yticklabels(plot_order, fontsize=12, fontweight='bold')
-    ax.set_ylim(-0.8, len(plot_order) - 0.2)
-    plt.title(f"Production Plan - Week of {start_date} (+6hrs)", fontsize=16, pad=40, fontproperties=jp_font)
+    ax.set_yticklabels(plot_order, fontsize=14, fontweight='bold')
+    ax.set_ylim(-0.4, 6.4)
+    
+    # 4. タイトルの巨大化 (32pt) と位置調整
+    plt.title(f"Production Plan - Week of {start_date} (+6hrs)", fontsize=32, pad=60, fontproperties=jp_font, fontweight='bold')
+    
+    # 5. 承認ボックス (PM & SV) の配置 - 合計330px左、50px下へ調整
+    box_w, box_h = 0.033, 0.0625
+    pos_y = 0.869  # 50px分下げた位置
+    # 左への移動を反映したX座標
+    new_pm_x = 0.883 - 0.01 
+    new_sv_x = 0.833 - 0.01 
+
+    # SV Box
+    rect_sv = Rectangle((new_sv_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=1.5, zorder=10)
+    fig.patches.append(rect_sv)
+    fig.text(new_sv_x + (box_w/2), pos_y + box_h + 0.01, 'SV', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=12, zorder=11)
+    # PM Box
+    rect_pm = Rectangle((new_pm_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=1.5, zorder=10)
+    fig.patches.append(rect_pm)
+    fig.text(new_pm_x + (box_w/2), pos_y + box_h + 0.01, 'PM', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=12, zorder=11)
+
     plt.tight_layout()
     buf = BytesIO(); plt.savefig(buf, format='png'); plt.close(); buf.seek(0)
     return buf, fig
 
+# --- Streamlit UI ---
 st.set_page_config(layout="wide", page_title="Production Planner")
 st.title("🏭 Production Plan Visualizer & Master Report")
 
@@ -239,6 +254,6 @@ if uploaded_file:
                 ws_vis.add_image(openpyxl.drawing.image.Image(img_copy), 'B2')
                 out_excel = BytesIO(); wb.save(out_excel)
                 
-                st.success("✅ 生成完了 (Ticks高さ0.1調整済)")
+                st.success("✅ 生成完了")
                 st.download_button("📥 ダウンロード (Excel)", out_excel.getvalue(), f"Production_Report_{selected_week}.xlsx")
                 st.pyplot(fig)
