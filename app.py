@@ -93,14 +93,14 @@ def generate_plot(df_tasks, start_date):
     plot_order = [NAME_MAP[n] for n in requested_order[::-1]]
     line_to_y = {NAME_MAP[n]: i for i, n in enumerate(requested_order[::-1])}
 
-    # 1. フィギュアサイズ・余白 (30x20, top=0.82)
     fig, ax = plt.subplots(figsize=(30, 20), facecolor='white')
     plt.subplots_adjust(top=0.82, bottom=0.08, left=0.08, right=0.95)
     
-    # --- 修正箇所：ラベルのオフセットを ±30 に設定 ---
-    line_offset_state = {line: 30 for line in plot_order}
+    # 状態管理：ボックス用(±30)と、テキスト用(±0.05)
+    box_offset_state = {line: 30 for line in plot_order}
+    text_offset_state = {line: 0.05 for line in plot_order}
 
-    # タスクマージロジック
+    # タスクマージ
     merged = []
     for line_key in requested_order:
         line_df = df_tasks[df_tasks['Line'] == line_key].sort_values('Start')
@@ -134,15 +134,19 @@ def generate_plot(df_tasks, start_date):
         
         mid = mdates.date2num(max(camp['Start'], plot_start) + (min(camp['Finish'], plot_end) - max(camp['Start'], plot_start))/2)
         
-        # ラベル表示（±30オフセット適用）
         if is_m:
-            ax.text(mid, y + 0.15, camp['Product'], ha='center', va='bottom', fontsize=11, color='#555555', fontweight='bold', fontproperties=jp_font, zorder=5)
+            # メンテナンス用：±0.05 の位置にテキストを表示 (交互切り替え)
+            y_text_off = text_offset_state[line_name]
+            text_offset_state[line_name] = -0.05 if y_text_off > 0 else 0.05
+            v_align = 'bottom' if y_text_off > 0 else 'top'
+            ax.text(mid, y + y_text_off, camp['Product'], ha='center', va=v_align, fontsize=11, color='#555555', fontweight='bold', fontproperties=jp_font, zorder=5)
         else:
-            y_off = line_offset_state[line_name]
-            line_offset_state[line_name] = -30 if y_off > 0 else 30 # ここで±30
-            ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_off), textcoords='offset points', ha='center', va=('bottom' if y_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1.5, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color, lw=1), fontsize=11, fontweight='bold', fontproperties=jp_font, zorder=6)
+            # 製品用：±30 ポイントのボックス表示 (交互切り替え)
+            y_box_off = box_offset_state[line_name]
+            box_offset_state[line_name] = -30 if y_box_off > 0 else 30
+            ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_box_off), textcoords='offset points', ha='center', va=('bottom' if y_box_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1.5, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color, lw=1), fontsize=11, fontweight='bold', fontproperties=jp_font, zorder=6)
 
-    # ガイド数値
+    # ガイド数値、軸、タイトル、承認ボックスの設定 (変更なし)
     for y_idx in range(len(plot_order) - 1):
         strip_y = y_idx + 0.5
         ax.axhline(strip_y, color='#F5F5F5', linewidth=20, zorder=1)
@@ -150,7 +154,6 @@ def generate_plot(df_tasks, start_date):
             t_mark = plot_start + datetime.timedelta(hours=h_offset)
             ax.text(mdates.date2num(t_mark), strip_y, f"{t_mark.hour}", color='#999999', fontsize=10, ha='center', va='center', zorder=2, fontweight='bold')
 
-    # 軸設定
     ax.set_xlim(mdates.date2num(plot_start), mdates.date2num(plot_end))
     ax.xaxis.set_major_locator(mdates.DayLocator())
     ax.xaxis.set_major_formatter(mdates.DateFormatter('\n%m/%d (%a)'))
@@ -159,13 +162,10 @@ def generate_plot(df_tasks, start_date):
     ax.set_yticks(range(len(plot_order)))
     ax.set_yticklabels(plot_order, fontsize=16, fontweight='bold')
     ax.set_ylim(-0.8, 6.8)
-    for i in range(9): 
-        ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=3, zorder=5)
+    for i in range(9): ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.4, linewidth=3, zorder=5)
 
-    # タイトル (48pt)
     ax.text(0.5, 1.12, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
     
-    # 承認ボックス
     box_w, box_h = 0.033, 0.05
     pos_y = 0.88
     new_pm_x, new_sv_x = 0.883 - 0.011, 0.833 - 0.011 
