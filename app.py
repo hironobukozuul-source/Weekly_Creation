@@ -154,7 +154,17 @@ def generate_plot(df_tasks, start_date):
     ax.xaxis.set_minor_formatter(FuncFormatter(lambda x, pos: f"{mdates.num2date(x).hour}"))
     ax.set_yticks(range(len(plot_order))); ax.set_yticklabels(plot_order, fontsize=16, fontweight='bold')
     ax.set_ylim(-0.8, 6.8)
-    for i in range(9): ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.3, linewidth=3, zorder=5)
+
+    # Hourly grey gridlines — zorder=2 so they sit above the strip backgrounds (zorder=1)
+    for h in range(TOTAL_HOURS + 1):
+        ax.axvline(mdates.date2num(plot_start + datetime.timedelta(hours=h)),
+                   color='#BBBBBB', linewidth=0.8, zorder=2)
+
+    # Shift-boundary red lines at 02:45 each day
+    shift_offset = datetime.timedelta(hours=2, minutes=45)
+    for i in range(8):
+        ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i) + shift_offset),
+                   color='red', alpha=0.3, linewidth=3, zorder=5)
 
     ax.text(0.5, 1.12, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
     
