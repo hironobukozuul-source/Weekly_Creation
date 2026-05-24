@@ -152,27 +152,27 @@ def generate_plot(df_tasks, start_date):
     ax.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 3, 6, 9, 12, 15, 18, 21]))
     ax.xaxis.set_minor_formatter(FuncFormatter(lambda x, pos: f"{mdates.num2date(x).hour}"))
     ax.set_yticks(range(len(plot_order))); ax.set_yticklabels(plot_order, fontsize=16, fontweight='bold')
-    ax.set_ylim(-1.0, 6.0)
+    ax.set_ylim(-0.5, 5.5)  # equal 0.5-unit padding top/bottom matching strip half-gaps
 
-    # Date labels at the top of the plot area
-    ax_top = ax.twiny()
-    ax_top.set_xlim(ax.get_xlim())
-    ax_top.xaxis.set_major_locator(mdates.DayLocator())
-    ax_top.xaxis.set_major_formatter(mdates.DateFormatter('%m/%d (%a)'))
-    ax_top.tick_params(axis='x', which='major', labelsize=13, pad=4, length=0)
-
-    # Hourly grey gridlines — zorder=2 so they sit above the strip backgrounds (zorder=1)
+    # Hourly grey gridlines
     for h in range(TOTAL_HOURS + 1):
         ax.axvline(mdates.date2num(plot_start + datetime.timedelta(hours=h)),
                    color='#E8E8E8', linewidth=0.4, zorder=2)
 
-    # Shift-boundary red lines at 02:45 each day
+    # Red lines + date labels at 02:45 each day
     shift_offset = datetime.timedelta(hours=2, minutes=45)
+    blend = ax.get_xaxis_transform()  # x in data coords, y in axes fraction
     for i in range(8):
-        ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i) + shift_offset),
-                   color='red', alpha=0.3, linewidth=3, zorder=5)
+        t_red = plot_start + datetime.timedelta(days=i) + shift_offset
+        if t_red > plot_end: break
+        ax.axvline(mdates.date2num(t_red), color='red', alpha=0.3, linewidth=3, zorder=5)
+        day_label = (plot_start + datetime.timedelta(days=i)).strftime('%m/%d (%a)')
+        ax.text(mdates.date2num(t_red), 1.01, day_label,
+                transform=blend, ha='left', va='bottom',
+                fontsize=26, fontweight='bold', color='#222222',
+                fontproperties=jp_font, zorder=7)
 
-    ax.text(0.5, 1.10, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
+    ax.text(0.5, 1.16, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
     
     # 承認ボックス
     box_w, box_h = 0.033, 0.05
