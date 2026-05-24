@@ -30,8 +30,8 @@ def setup_japanese_font():
 jp_font = setup_japanese_font()
 
 # --- 定数・マッピング設定 ---
-NAME_MAP = {'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'}
-LINE_START_COLS = {'Pump': 2, 'Ref1': 11, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
+NAME_MAP = {'Pump': 'Pump', 'Flexible': 'Flexible', 'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'}
+LINE_START_COLS = {'Pump': 2, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
 DATE_COL = 63
 MAINT_KEYWORDS = ['P/C', 'CLN', 'SETUP', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC', '原価改定', '段取', 'メンテナンス', '点検', '清掃', '切替', '予備', 'WAIT', 'SAMPLE']
 TOTAL_HOURS = 174 
@@ -92,13 +92,12 @@ def process_tasks(df_raw):
 def generate_plot(df_tasks, start_date):
     plot_start = datetime.datetime.combine(start_date, datetime.time(0, 0))
     plot_end = plot_start + datetime.timedelta(hours=TOTAL_HOURS)
-    requested_order = ['Pump', 'Ref1', 'Flexible', 'Ref3', 'Ref4', 'Ref5', 'Awa']
+    requested_order = ['Pump', 'Flexible', 'Ref3', 'Ref4', 'Ref5', 'Awa']
     plot_order = [NAME_MAP[n] for n in requested_order[::-1]]
     line_to_y = {NAME_MAP[n]: i for i, n in enumerate(requested_order[::-1])}
 
-    # フィギュアサイズ 30x20
     fig, ax = plt.subplots(figsize=(30, 20), facecolor='white')
-    plt.subplots_adjust(top=0.82, bottom=0.08, left=0.08, right=0.95)
+    plt.subplots_adjust(top=0.91, bottom=0.05, left=0.05, right=0.99)
     
     box_offset_state = {line: 30 for line in plot_order}
     text_offset_state = {line: 0.05 for line in plot_order}
@@ -153,7 +152,7 @@ def generate_plot(df_tasks, start_date):
     ax.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 3, 6, 9, 12, 15, 18, 21]))
     ax.xaxis.set_minor_formatter(FuncFormatter(lambda x, pos: f"{mdates.num2date(x).hour}"))
     ax.set_yticks(range(len(plot_order))); ax.set_yticklabels(plot_order, fontsize=16, fontweight='bold')
-    ax.set_ylim(-0.8, 6.8)
+    ax.set_ylim(-0.8, 5.8)
 
     # Hourly grey gridlines — zorder=2 so they sit above the strip backgrounds (zorder=1)
     for h in range(TOTAL_HOURS + 1):
@@ -166,18 +165,18 @@ def generate_plot(df_tasks, start_date):
         ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i) + shift_offset),
                    color='red', alpha=0.3, linewidth=3, zorder=5)
 
-    ax.text(0.5, 1.12, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
+    ax.text(0.5, 1.07, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
     
     # 承認ボックス
     box_w, box_h = 0.033, 0.05
-    pos_y = 0.88
+    pos_y = 0.93
     new_pm_x, new_sv_x = 0.883 - 0.011, 0.833 - 0.011 
     fig.patches.append(Rectangle((new_sv_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=2))
-    fig.text(new_sv_x + (box_w/2), pos_y + box_h + 0.005, 'SV', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=16)
+    fig.text(new_sv_x + (box_w/2), pos_y + box_h + 0.004, 'SV', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=16)
     fig.patches.append(Rectangle((new_pm_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=2))
-    fig.text(new_pm_x + (box_w/2), pos_y + box_h + 0.005, 'PM', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=16)
+    fig.text(new_pm_x + (box_w/2), pos_y + box_h + 0.004, 'PM', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=16)
 
-    buf = BytesIO(); plt.savefig(buf, format='png'); plt.close(); buf.seek(0)
+    buf = BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.05); plt.close(); buf.seek(0)
     return buf
 
 # --- UI / メインロジック ---
