@@ -172,11 +172,11 @@ def generate_plot(df_tasks, start_date):
                 fontsize=26, fontweight='bold', color='#222222',
                 fontproperties=jp_font, zorder=7)
 
-    ax.text(0.5, 1.16, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
+    ax.text(0.5, 1.06, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
     
     # 承認ボックス
     box_w, box_h = 0.033, 0.05
-    pos_y = 0.93
+    pos_y = 0.955
     new_pm_x, new_sv_x = 0.883 - 0.011, 0.833 - 0.011 
     fig.patches.append(Rectangle((new_sv_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=2))
     fig.text(new_sv_x + (box_w/2), pos_y + box_h + 0.004, 'SV', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=16)
