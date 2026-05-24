@@ -96,7 +96,7 @@ def generate_plot(df_tasks, start_date):
     plot_order = [NAME_MAP[n] for n in requested_order[::-1]]
     line_to_y = {NAME_MAP[n]: i for i, n in enumerate(requested_order[::-1])}
 
-    fig, ax = plt.subplots(figsize=(30, 20), facecolor='white')
+    fig, ax = plt.subplots(figsize=(30, 21.2), facecolor='white')
     plt.subplots_adjust(top=0.91, bottom=0.05, left=0.05, right=0.99)
     
     box_offset_state = {line: 30 for line in plot_order}
@@ -174,16 +174,17 @@ def generate_plot(df_tasks, start_date):
 
     ax.text(0.5, 1.06, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
     
-    # 承認ボックス
-    box_w, box_h = 0.033, 0.05
-    pos_y = 0.955
+    # 承認ボックス — pos_y tuned so labels stay within figure [0,1]
+    box_w, box_h = 0.033, 0.045
+    pos_y = 0.940
     new_pm_x, new_sv_x = 0.883 - 0.011, 0.833 - 0.011 
     fig.patches.append(Rectangle((new_sv_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=2))
     fig.text(new_sv_x + (box_w/2), pos_y + box_h + 0.004, 'SV', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=16)
     fig.patches.append(Rectangle((new_pm_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=2))
     fig.text(new_pm_x + (box_w/2), pos_y + box_h + 0.004, 'PM', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=16)
 
-    buf = BytesIO(); plt.savefig(buf, format='png', bbox_inches='tight', pad_inches=0.05); plt.close(); buf.seek(0)
+    # No bbox_inches='tight' — preserve exact A4 landscape ratio (30 × 21.2 = 1.414:1)
+    buf = BytesIO(); plt.savefig(buf, format='png', dpi=150); plt.close(); buf.seek(0)
     return buf
 
 # --- UI / メインロジック ---
