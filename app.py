@@ -166,11 +166,12 @@ def generate_plot(df_tasks, start_date):
         t_red = plot_start + datetime.timedelta(days=i) + shift_offset
         if t_red > plot_end: break
         ax.axvline(mdates.date2num(t_red), color='red', alpha=0.3, linewidth=3, zorder=5)
-        day_label = (plot_start + datetime.timedelta(days=i)).strftime('%m/%d (%a)')
-        ax.text(mdates.date2num(t_red), 1.01, day_label,
-                transform=blend, ha='left', va='bottom',
-                fontsize=26, fontweight='bold', color='#222222',
-                fontproperties=jp_font, zorder=7)
+        if i < 7:  # skip label for second Monday on right edge
+            day_label = (plot_start + datetime.timedelta(days=i)).strftime('%m/%d (%a)')
+            ax.text(mdates.date2num(t_red), 1.01, day_label,
+                    transform=blend, ha='left', va='bottom',
+                    fontsize=26, fontweight='bold', color='#222222',
+                    fontproperties=jp_font, zorder=7)
 
     ax.text(0.5, 1.06, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
     
