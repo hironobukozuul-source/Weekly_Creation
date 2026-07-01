@@ -133,7 +133,7 @@ def process_tasks(df_raw):
 def generate_plot(df_tasks, start_date, sg_cap_map, display_unit):
     plot_start = datetime.datetime.combine(start_date, datetime.time(0, 0))
     plot_end = plot_start + datetime.timedelta(hours=TOTAL_HOURS)
-    requested_order = ['Pump', 'Ref1', 'Flexible', 'Ref3', 'Ref4', 'Ref5', 'Awa']
+    requested_order = ['Pump', 'Mini Bottle', 'Flexible', 'Ref3', 'Ref4', 'Ref5', 'Awa']
     plot_order = [NAME_MAP[n] for n in requested_order[::-1]]
     line_to_y = {NAME_MAP[n]: i for i, n in enumerate(requested_order[::-1])}
 
