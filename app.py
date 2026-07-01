@@ -31,7 +31,7 @@ jp_font = setup_japanese_font()
 
 # --- 定数・マッピング設定 ---
 NAME_MAP = {'Pump': 'Pump', 'Mini Bottle': 'Mini', 'Flexible': 'Flexible', 'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'}
-LINE_START_COLS = {'Pump': 2, 'Ref1': 11, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
+LINE_START_COLS = {'Pump': 2, 'Mini Bottle': 11, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
 DATE_COL = 63
 MAINT_KEYWORDS = ['P/C', 'CLN', 'SETUP', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC', '原価改定', '段取', 'メンテナンス', '点検', '清掃', '切替', '予備', 'WAIT', 'SAMPLE']
 TOTAL_HOURS = 174 
