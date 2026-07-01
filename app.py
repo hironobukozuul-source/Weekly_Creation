@@ -167,7 +167,7 @@ def generate_plot(df_tasks, start_date, sg_cap_map, display_unit):
             s, e = max(mdates.date2num(s_dt), mdates.date2num(plot_start)), min(mdates.date2num(f_dt), mdates.date2num(plot_end))
             if e > s:
                 if is_m: ax.hlines(y, s, e, colors=color, linestyles='dotted', linewidth=4.0, zorder=3)
-                else: ax.hlines(y, s, e, colors=color, linewidth=12, Flux=True, capstyle='butt', zorder=3)
+                else: ax.hlines(y, s, e, colors=color, linewidth=12, capstyle='butt', zorder=3)
                 ax.vlines(e, y - tick_half_h, y + tick_half_h, colors=color, linewidth=2.0, zorder=4)
         
         mid = mdates.date2num(max(camp['Start'], plot_start) + (min(camp['Finish'], plot_end) - max(camp['Start'], plot_start))/2)
