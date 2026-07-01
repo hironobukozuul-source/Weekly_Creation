@@ -30,8 +30,8 @@ def setup_japanese_font():
 jp_font = setup_japanese_font()
 
 # --- 定数・マッピング設定 ---
-NAME_MAP = {'Pump': 'Pump', 'Flexible': 'Flexible', 'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'}
-LINE_START_COLS = {'Pump': 2, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
+NAME_MAP = {'Pump': 'Pump', 'Ref1': 'Ref-1', 'Flexible': 'Flexible', 'Ref3': 'Ref-3', 'Ref4': 'Ref-4', 'Ref5': 'Ref-5', 'Awa': 'Awa'}
+LINE_START_COLS = {'Pump': 2, 'Ref1': 11, 'Flexible': 20, 'Ref3': 29, 'Ref4': 38, 'Ref5': 47, 'Awa': 56}
 DATE_COL = 63
 MAINT_KEYWORDS = ['P/C', 'CLN', 'SETUP', '洗浄', 'うがい', 'SPARE', 'C/L', 'QC', '原価改定', '段取', 'メンテナンス', '点検', '清掃', '切替', '予備', 'WAIT', 'SAMPLE']
 TOTAL_HOURS = 174 
@@ -48,6 +48,33 @@ def get_available_weeks(df_raw):
     dates = pd.to_datetime(df_raw.iloc[3:, DATE_COL], errors='coerce').dropna()
     mondays = dates[dates.dt.weekday == 0].dt.date.unique()
     return sorted(mondays)
+
+@st.cache_data
+def load_sg_cap_mappings(uploaded_file):
+    """
+    Parses the SG-cap sheet to read the dynamic structural parameters:
+    Column D (Index 3) -> SKU/Material Name
+    Column G (Index 6) -> Filling Weight in Grams
+    """
+    try:
+        df_cap = pd.read_excel(uploaded_file, sheet_name='SG-cap', header=None)
+        mapping = {}
+        for r in range(len(df_cap)):
+            sku_val = df_cap.iloc[r, 3]    # Column D
+            weight_val = df_cap.iloc[r, 6] # Column G
+            
+            if pd.notna(sku_val) and pd.notna(weight_val):
+                sku_str = str(sku_val).strip()
+                try:
+                    weight_float = float(weight_val)
+                    if weight_float > 0:
+                        mapping[sku_str] = weight_float
+                except ValueError:
+                    continue
+        return mapping
+    except Exception as e:
+        st.sidebar.error(f"SG-cap mapping error: {e}")
+        return {}
 
 def process_tasks(df_raw):
     tasks = []
@@ -89,15 +116,15 @@ def process_tasks(df_raw):
                 line_states[line]['last_start_time'] = s_t
     return pd.DataFrame(tasks)
 
-def generate_plot(df_tasks, start_date):
+def generate_plot(df_tasks, start_date, sg_cap_map, display_unit):
     plot_start = datetime.datetime.combine(start_date, datetime.time(0, 0))
     plot_end = plot_start + datetime.timedelta(hours=TOTAL_HOURS)
-    requested_order = ['Pump', 'Flexible', 'Ref3', 'Ref4', 'Ref5', 'Awa']
+    requested_order = ['Pump', 'Ref1', 'Flexible', 'Ref3', 'Ref4', 'Ref5', 'Awa']
     plot_order = [NAME_MAP[n] for n in requested_order[::-1]]
     line_to_y = {NAME_MAP[n]: i for i, n in enumerate(requested_order[::-1])}
 
-    fig, ax = plt.subplots(figsize=(30, 21.2), facecolor='white')
-    plt.subplots_adjust(top=0.91, bottom=0.05, left=0.05, right=0.99)
+    fig, ax = plt.subplots(figsize=(30, 20), facecolor='white')
+    plt.subplots_adjust(top=0.82, bottom=0.08, left=0.08, right=0.95)
     
     box_offset_state = {line: 30 for line in plot_order}
     text_offset_state = {line: 0.05 for line in plot_order}
@@ -137,7 +164,20 @@ def generate_plot(df_tasks, start_date):
         else:
             y_box_off = box_offset_state[line_name]
             box_offset_state[line_name] = -30 if y_box_off > 0 else 30
-            ax.annotate(f"{camp['Product']}\n{camp['TotalTon']:.1f}t", xy=(mid, y), xytext=(0, y_box_off), textcoords='offset points', ha='center', va=('bottom' if y_box_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1.5, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color, lw=1), fontsize=11, fontweight='bold', fontproperties=jp_font, zorder=6)
+            
+            # Context-Aware Dashboard Metric Switching
+            if display_unit == "Pieces (pcs)":
+                sku_clean = str(camp['Product']).strip()
+                filling_g = sg_cap_map.get(sku_clean, None)
+                if filling_g:
+                    calculated_pcs = (camp['TotalTon'] * 1000000) / filling_g
+                    label_str = f"{camp['Product']}\n{calculated_pcs:,.0f} pcs"
+                else:
+                    label_str = f"{camp['Product']}\n{camp['TotalTon']:.1f}t\n(No Weight Factor)"
+            else:
+                label_str = f"{camp['Product']}\n{camp['TotalTon']:.1f}t"
+                
+            ax.annotate(label_str, xy=(mid, y), xytext=(0, y_box_off), textcoords='offset points', ha='center', va=('bottom' if y_box_off > 0 else 'top'), bbox=dict(boxstyle='square,pad=0.3', fc='white', ec=color, lw=1.5, alpha=0.9), arrowprops=dict(arrowstyle='->', color=color, lw=1), fontsize=11, fontweight='bold', fontproperties=jp_font, zorder=6)
 
     for y_idx in range(len(plot_order) - 1):
         strip_y = y_idx + 0.5
@@ -152,66 +192,58 @@ def generate_plot(df_tasks, start_date):
     ax.xaxis.set_minor_locator(mdates.HourLocator(byhour=[0, 3, 6, 9, 12, 15, 18, 21]))
     ax.xaxis.set_minor_formatter(FuncFormatter(lambda x, pos: f"{mdates.num2date(x).hour}"))
     ax.set_yticks(range(len(plot_order))); ax.set_yticklabels(plot_order, fontsize=16, fontweight='bold')
-    ax.set_ylim(-0.5, 5.5)  # equal 0.5-unit padding top/bottom matching strip half-gaps
+    ax.set_ylim(-0.8, 6.8)
+    for i in range(9): ax.axvline(mdates.date2num(plot_start + datetime.timedelta(days=i)), color='red', alpha=0.3, linewidth=3, zorder=5)
 
-    # Hourly grey gridlines
-    for h in range(TOTAL_HOURS + 1):
-        ax.axvline(mdates.date2num(plot_start + datetime.timedelta(hours=h)),
-                   color='#E8E8E8', linewidth=0.4, zorder=2)
-
-    # Red lines + date labels at 02:45 each day
-    shift_offset = datetime.timedelta(hours=2, minutes=45)
-    blend = ax.get_xaxis_transform()  # x in data coords, y in axes fraction
-    for i in range(8):
-        t_red = plot_start + datetime.timedelta(days=i) + shift_offset
-        if t_red > plot_end: break
-        ax.axvline(mdates.date2num(t_red), color='red', alpha=0.3, linewidth=3, zorder=5)
-        if i < 7:  # skip label for second Monday on right edge
-            day_label = (plot_start + datetime.timedelta(days=i)).strftime('%m/%d (%a)')
-            ax.text(mdates.date2num(t_red), 1.01, day_label,
-                    transform=blend, ha='left', va='bottom',
-                    fontsize=26, fontweight='bold', color='#222222',
-                    fontproperties=jp_font, zorder=7)
-
-    ax.text(0.5, 1.06, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
+    ax.text(0.5, 1.12, f"Production Plan - Week of {start_date} (+6hrs)", transform=ax.transAxes, fontsize=48, fontweight='bold', ha='center', va='center', fontproperties=jp_font)
     
-    # 承認ボックス — pos_y tuned so labels stay within figure [0,1]
-    box_w, box_h = 0.033, 0.045
-    pos_y = 0.940
+    box_w, box_h = 0.033, 0.05
+    pos_y = 0.88
     new_pm_x, new_sv_x = 0.883 - 0.011, 0.833 - 0.011 
     fig.patches.append(Rectangle((new_sv_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=2))
-    fig.text(new_sv_x + (box_w/2), pos_y + box_h + 0.004, 'SV', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=16)
+    fig.text(new_sv_x + (box_w/2), pos_y + box_h + 0.005, 'SV', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=16)
     fig.patches.append(Rectangle((new_pm_x, pos_y), box_w, box_h, transform=fig.transFigure, fill=False, edgecolor='black', lw=2))
-    fig.text(new_pm_x + (box_w/2), pos_y + box_h + 0.004, 'PM', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=16)
+    fig.text(new_pm_x + (box_w/2), pos_y + box_h + 0.005, 'PM', transform=fig.transFigure, ha='center', fontweight='bold', fontsize=16)
 
-    # No bbox_inches='tight' — preserve exact A4 landscape ratio (30 × 21.2 = 1.414:1)
-    buf = BytesIO(); plt.savefig(buf, format='png', dpi=150); plt.close(); buf.seek(0)
+    buf = BytesIO(); plt.savefig(buf, format='png'); plt.close(); buf.seek(0)
     return buf
 
 # --- UI / メインロジック ---
 st.set_page_config(layout="wide", page_title="Weekly Production Master Report")
 st.title("🏭 Weekly Production Master Report Generator")
+
+# Interactive UI Control Mode toggle for runtime chart rendering switching
+display_unit = st.sidebar.radio("Dashboard Gantt Display Unit Mode:", ["Tonnage (t)", "Pieces (pcs)"])
+
 uploaded_file = st.file_uploader("Excelファイルをアップロード (.xlsm)", type=["xlsm"])
 
 if uploaded_file:
     df_raw = pd.read_excel(uploaded_file, sheet_name='Fill', header=None)
+    
+    # Instantiate lookups natively
+    sg_cap_map = load_sg_cap_mappings(uploaded_file)
+    if sg_cap_map:
+        st.sidebar.success(f"Successfully loaded {len(sg_cap_map)} product configurations from 'SG-cap'!")
+    else:
+        st.sidebar.warning("No mappings loaded. Check 'SG-cap' layout column names.")
+        
     available_weeks = get_available_weeks(df_raw)
     if available_weeks:
         selected_week = st.selectbox("対象週を選択", available_weeks)
         if st.button("🚀 レポート生成開始"):
             with st.spinner('計算と描画を行っています...'):
                 df_tasks = process_tasks(df_raw)
-                img_buf = generate_plot(df_tasks, selected_week)
+                img_buf = generate_plot(df_tasks, selected_week, sg_cap_map, display_unit)
                 
                 # --- Excel生成 ---
                 wb = openpyxl.Workbook()
-                
-                # 1. Hourly_Volume シート (以前の関数の移植)
-                ws_vol = wb.active
-                ws_vol.title = "Hourly_Volume"
+                thick_black = Side(style='thick', color='000000')
                 start_dt_excel = datetime.datetime.combine(selected_week, datetime.time(0, 0))
                 hour_list = [start_dt_excel + datetime.timedelta(hours=h) for h in range(TOTAL_HOURS)]
-                thick_black = Side(style='thick', color='000000')
+                
+                # 1. Hourly_Volume シート (Tonnage Engine)
+                ws_vol = wb.active
+                ws_vol.title = "Hourly_Volume"
                 
                 ws_vol.cell(1, 1, "Line").font = Font(bold=True)
                 ws_vol.cell(1, 2, "Product").font = Font(bold=True)
@@ -239,7 +271,54 @@ if uploaded_file:
                     if "00:00" in header:
                         for r in range(1, ws_vol.max_row + 1): ws_vol.cell(r, col_idx).border = Border(left=thick_black)
 
-                # 2. Visual_Schedule シート
+                # =========================================================
+                # NEW ADDITION: 2. Hourly_Pieces Sheet Generation Engine
+                # =========================================================
+                ws_pcs = wb.create_sheet("Hourly_Pieces")
+                ws_pcs.cell(1, 1, "Line").font = Font(bold=True)
+                ws_pcs.cell(1, 2, "Product").font = Font(bold=True)
+                
+                # Format time headers identical to Hourly_Volume
+                for i, h_dt in enumerate(hour_list):
+                    next_h = h_dt + datetime.timedelta(hours=1)
+                    header_str = f"{h_dt.strftime('%m/%d %H:%M')}~{next_h.strftime('%H:%M')}"
+                    cell = ws_pcs.cell(1, 3 + i, header_str)
+                    cell.font = Font(bold=True); cell.alignment = Alignment(text_rotation=90, horizontal='center')
+
+                # Calculate matrix intersections for piece targets
+                for r_idx, (line, product) in enumerate(unique_items):
+                    row_num = r_idx + 2
+                    ws_pcs.cell(row_num, 1, line); ws_pcs.cell(row_num, 2, product)
+                    
+                    # Fetch filling specification from SG-cap matrix
+                    sku_name_clean = str(product).strip()
+                    filling_grams = sg_cap_map.get(sku_name_clean, None)
+                    
+                    for c_idx, h_dt in enumerate(hour_list):
+                        h_end = h_dt + datetime.timedelta(hours=1)
+                        overlap_tasks = clean_tasks[(clean_tasks['Line'] == line) & (clean_tasks['Product'] == product)]
+                        ton_sum = sum(t['Ton'] * ((min(t['Finish'], h_end) - max(t['Start'], h_dt)).total_seconds() / (t['Finish'] - t['Start']).total_seconds()) for _, t in overlap_tasks.iterrows() if (min(t['Finish'], h_end) - max(t['Start'], h_dt)).total_seconds() > 0)
+                        
+                        if ton_sum > 0:
+                            if filling_grams:
+                                # Tonnage * 1M grams / item unit grams
+                                total_pcs_calculated = (ton_sum * 1000000) / filling_grams
+                                cell = ws_pcs.cell(row_num, 3 + c_idx, int(round(total_pcs_calculated)))
+                            else:
+                                # Traceable error output if SKU configuration data is missing
+                                cell = ws_pcs.cell(row_num, 3 + c_idx, "Missing SG-cap Specs")
+                            
+                            # Soft blue highlight variant for structural distinction from volume page
+                            cell.fill = PatternFill(start_color="C9DAF8", end_color="C9DAF8", fill_type="solid")
+
+                # Apply midnight vertical break rule boundaries 
+                for col_idx in range(3, ws_pcs.max_column + 1):
+                    header = str(ws_pcs.cell(1, col_idx).value)
+                    if "00:00" in header:
+                        for r in range(1, ws_pcs.max_row + 1): ws_pcs.cell(r, col_idx).border = Border(left=thick_black)
+                # =========================================================
+
+                # 3. Visual_Schedule シート
                 ws_vis = wb.create_sheet("Visual_Schedule")
                 img_for_excel = BytesIO(img_buf.getvalue())
                 ws_vis.add_image(openpyxl.drawing.image.Image(img_for_excel), 'B2')
